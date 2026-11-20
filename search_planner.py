@@ -11,9 +11,9 @@ import random
 import time
 
 from fleetkit import baseline
-from fleetkit.baseline import (_Planner, _effector_route, EFFECTOR_LAYERS,
-                               SCOUT_LAYERS)
-from fleetkit.energy import route_energy_wh
+from fleetkit.baseline import (_Planner, _effector_route, _scout_route, EFFECTOR_LAYERS,
+                               SCOUT_LAYERS, SPEED_FACTOR)
+from fleetkit.energy import best_range_speed, route_energy_wh
 from fleetkit.geometry import EPS, hdist
 from fleetkit.model import HOSTILE, SCOUT, UNKNOWN, parse_plan
 from fleetkit.scorer import evaluate
@@ -249,6 +249,7 @@ class Search:
         self.passes = 0
         # Per-contact attempt accounting for "why was this contact not served".
         self.attempts = {}
+        self.repaired = set()
 
     def stats(self, cid):
         if cid not in self.attempts:
@@ -283,7 +284,34 @@ class Search:
                 state = replace(p.last, tasks=dict(p.tasks))
                 p.state = self.record(state, p.state, {"kind": "greedy", "contact": c.id}, depth)
 
-    def children(self, parent, contact, stop, limit=2):
+    def slots(self, p, contact, insert):
+        """(scout, tour position) pairs. Search appends to the 4 nearest tours; repair
+        ranks every insertion position of every scout by added distance."""
+        scouts = p._scout_candidates(contact, limit=len(p.tasks))
+        if not insert:
+            scouts.sort(key=lambda a: hdist(p.tasks[a.id][-1]["point"] if p.tasks[a.id]
+                                           else a.home, contact.pos))
+            return [(a, len(p.tasks[a.id])) for a in scouts[:4]]
+        ranked = []
+        for a in scouts:
+            stops = [a.home] + [t["point"] for t in p.tasks[a.id]] + [a.home]
+            for k in range(len(stops) - 1):
+                added = (hdist(stops[k], contact.pos) + hdist(contact.pos, stops[k+1])
+                         - hdist(stops[k], stops[k+1]))
+                ranked.append((added, a.id, k, a))
+        ranked.sort(key=lambda r: r[:3])
+        return [(a, k) for _, _, k, a in ranked[:8]]
+
+    def observation(self, p, scout, contact, z, angle, shift, k):
+        """baseline._Planner._add_observation, inserting the task at tour position k."""
+        task = {"cid": contact.id, "point": p._obs_point(scout, contact, angle), "window": contact.window}
+        tasks = p.tasks[scout.id][:k] + [task] + p.tasks[scout.id][k:]
+        speed = min(SPEED_FACTOR * scout.v_h_mps, best_range_speed(scout.power))
+        travel = hdist(scout.home, tasks[0]["point"]) / speed + z / scout.v_up_mps + 3.0
+        route = _scout_route(scout, tasks, max(0.0, tasks[0]["window"][0] - travel) + shift, z, self.sc)
+        return (tasks, route) if route is not None else None
+
+    def children(self, parent, contact, stop, limit=2, insert=False):
         """Bounded candidate generation, recording how far each attempt got."""
         if contact.id in parent.served:
             return
@@ -292,7 +320,7 @@ class Search:
         progress = {"stage": -1, "outcome": "no_options"}
         outcome = None
         try:
-            yield from self._children(parent, contact, stop, limit, stats, progress)
+            yield from self._children(parent, contact, stop, limit, stats, progress, insert)
             outcome = progress["outcome"]
         except DeadlineReached:
             outcome = "accepted" if progress["outcome"] == "accepted" else "time_cap"
@@ -310,7 +338,7 @@ class Search:
         if stage >= progress["stage"]:
             progress["stage"], progress["outcome"] = stage, outcome
 
-    def _children(self, parent, contact, stop, limit, stats, progress):
+    def _children(self, parent, contact, stop, limit, stats, progress, insert):
         """Bounded candidate generation: alternate scouts, teams and flight settings."""
         groups = self.matrix.groups(contact, parent.used) if contact.cls == HOSTILE else [()]
         if not groups:
@@ -318,16 +346,14 @@ class Search:
             return
         p = _Planner(self.sc)
         p.tasks = parent.tasks
-        scouts = p._scout_candidates(contact, limit=len(parent.tasks))
-        scouts.sort(key=lambda a: hdist(parent.tasks[a.id][-1]["point"] if parent.tasks[a.id]
-                                       else a.home, contact.pos))
         count = 0
         seen = set()
         # Round-robin teams before spending time on fine timing adjustments.
-        for scout, z, obs_angle, shift in itertools.product(scouts[:4], SCOUT_LAYERS,
-                                                           (0.0, 60.0, -60.0), (0.0, 7.0)):
+        for (scout, k), z, obs_angle, shift in itertools.product(self.slots(p, contact, insert),
+                                                                SCOUT_LAYERS, (0.0, 60.0, -60.0),
+                                                                (0.0, 7.0)):
             self.checker.check_time(stop)
-            built = p._add_observation(scout, contact, z, obs_angle, shift)
+            built = self.observation(p, scout, contact, z, obs_angle, shift, k)
             if built is None:
                 self._progress(stats, progress, "scout_route")
                 continue
@@ -395,6 +421,84 @@ class Search:
                 if found:
                     break
 
+    def repair(self, state, depth):
+        """Greedy fill of what the search left unserved: unknowns join any scout tour at
+        their cheapest positions, then hostiles retry with the free effectors."""
+        improved = True
+        while improved:
+            improved = False
+            contacts = [c for c in self.sc.contacts if c.cls in (HOSTILE, UNKNOWN)
+                        and c.window is not None and c.id not in self.matrix.banned
+                        and c.id not in state.served]
+            contacts.sort(key=lambda c: (c.cls != UNKNOWN, -self.matrix.priority(c), c.id))
+            for contact in contacts:
+                self.checker.check_time()
+                local_stop = min(self.stop, time.monotonic() + 0.25)
+                best = None
+                try:
+                    for child, decision in self.children(state, contact, local_stop, 4, True):
+                        if best is None or child.score > best[0].score:
+                            best = (child, decision)
+                except DeadlineReached:
+                    self.checker.check_time()
+                if best is not None:
+                    depth += 1
+                    state = self.record(best[0], state, {**best[1], "kind": "repair"}, depth)
+                    self.repaired.add(state.signature())
+                    improved = True
+        return state
+
+    def search(self, contacts, priorities, rng):
+        """Beam passes over varied contact orders until the checker deadline.
+        Returns False once the trace cap is reached."""
+        while contacts:
+            self.checker.check_time()
+            # Different orders explore different scout tours and allocations.
+            if self.passes % 4 == 0:
+                order = sorted(contacts, key=lambda c: (-priorities[c.id], c.id))
+            elif self.passes % 4 == 1:
+                order = sorted(contacts, key=lambda c: (c.window[1], -priorities[c.id], c.id))
+            elif self.passes % 4 == 2:
+                order = sorted(contacts, key=lambda c: (-c.points, c.id))
+            else:
+                noise = {c.id: rng.uniform(0.65, 1.35) for c in contacts}
+                order = sorted(contacts, key=lambda c: (-priorities[c.id]*noise[c.id], c.id))
+            beam = [self.root]
+            for depth, contact in enumerate(order, 1):
+                self.checker.check_time()
+                next_beam = []
+                for parent in beam:
+                    self.checker.check_time()
+                    skipped = self.record(parent, parent, {"kind": "skip", "contact": contact.id}, depth)
+                    next_beam.append(skipped)
+                    remaining = max(1, (len(order)-depth+1)*len(beam))
+                    allowance = min(0.12, max(0.005, (self.stop-time.monotonic()) / (remaining*1.5)))
+                    local_stop = min(self.stop, time.monotonic()+allowance)
+                    try:
+                        for child, decision in self.children(parent, contact, local_stop):
+                            next_beam.append(self.record(child, parent, decision, depth))
+                    except DeadlineReached:
+                        self.checker.check_time()  # Local cap expires without ending search.
+                unique = {}
+                for state in sorted(next_beam, key=lambda s: -s.score):
+                    unique.setdefault(state.signature(), state)
+                beam = list(unique.values())[:self.width]
+            self.passes += 1
+            # Bound trace size for long runs on tiny or impossible scenarios.
+            if len(self.trace) >= 20000:
+                return False
+        return True
+
+    def repair_archive(self):
+        """Repair archived plans, best first, each at most once."""
+        while True:
+            pending = [s for s in self.archive if s.signature() not in self.repaired]
+            if not pending:
+                return
+            self.repaired.add(pending[0].signature())
+            depth = max((n["depth"] for n in self.trace if n["id"] == pending[0].node_id), default=0)
+            self.repair(pending[0], depth)
+
     def run(self):
         try:
             self.warm_start()
@@ -405,45 +509,30 @@ class Search:
                     and c.window is not None and c.id not in self.matrix.banned]
         priorities = {c.id: self.matrix.priority(c) for c in contacts}
         rng = random.Random(self.sc.seed)
-        try:
-            while contacts:
-                self.checker.check_time()
-                # Different orders explore different scout tours and allocations.
-                if self.passes % 4 == 0:
-                    order = sorted(contacts, key=lambda c: (-priorities[c.id], c.id))
-                elif self.passes % 4 == 1:
-                    order = sorted(contacts, key=lambda c: (c.window[1], -priorities[c.id], c.id))
-                elif self.passes % 4 == 2:
-                    order = sorted(contacts, key=lambda c: (-c.points, c.id))
-                else:
-                    noise = {c.id: rng.uniform(0.65, 1.35) for c in contacts}
-                    order = sorted(contacts, key=lambda c: (-priorities[c.id]*noise[c.id], c.id))
-                beam = [self.root]
-                for depth, contact in enumerate(order, 1):
-                    self.checker.check_time()
-                    next_beam = []
-                    for parent in beam:
-                        self.checker.check_time()
-                        skipped = self.record(parent, parent, {"kind": "skip", "contact": contact.id}, depth)
-                        next_beam.append(skipped)
-                        remaining = max(1, (len(order)-depth+1)*len(beam))
-                        allowance = min(0.12, max(0.005, (self.stop-time.monotonic()) / (remaining*1.5)))
-                        local_stop = min(self.stop, time.monotonic()+allowance)
-                        try:
-                            for child, decision in self.children(parent, contact, local_stop):
-                                next_beam.append(self.record(child, parent, decision, depth))
-                        except DeadlineReached:
-                            self.checker.check_time()  # Local cap expires without ending search.
-                    unique = {}
-                    for state in sorted(next_beam, key=lambda s: -s.score):
-                        unique.setdefault(state.signature(), state)
-                    beam = list(unique.values())[:self.width]
-                self.passes += 1
-                # Bound trace size for long runs on tiny or impossible scenarios.
-                if len(self.trace) >= 20000:
-                    break
-        except DeadlineReached:
-            pass
+        # Alternate: search until a reserve before the deadline, then repair the best
+        # unrepaired plans. The reserve adapts to how long repairs take.
+        reserve = min(3.0, 0.1 * max(0.0, self.stop - time.monotonic()))
+        more = bool(contacts)
+        while time.monotonic() < self.stop:
+            # Too little time left to repair again: the last search uses all of it.
+            final = time.monotonic() >= self.stop - reserve
+            self.checker.stop = self.stop if final else self.stop - reserve
+            try:
+                if more:
+                    more = self.search(contacts, priorities, rng)
+            except DeadlineReached:
+                pass
+            self.checker.stop = self.stop
+            if final:
+                break
+            began = time.monotonic()
+            try:
+                self.repair_archive()
+            except DeadlineReached:
+                break
+            if not more:
+                break
+            reserve = min(reserve, max(0.5, 1.5 * (time.monotonic() - began)))
         # Official full validation is the authority; archive can include partial
         # plans because every scout already has its return-and-land leg.
         verified = []

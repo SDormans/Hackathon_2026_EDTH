@@ -184,6 +184,22 @@ class SearchTests(unittest.TestCase):
         for n in search.trace[1:]:
             self.assertLess(n['parent'], n['id'])
 
+    def test_repair_adds_unserved_unknown(self):
+        sc = scenario()
+        plan = greedy_plan(sc)
+        sc.contacts.append(replace(sc.contacts[1], id='U', cls='unknown', points=30,
+                                   needs={}, pos=(900.0, 200.0, 0.0)))
+        search = Search(sc, seconds=5)
+        search.matrix = CandidateMatrix(sc)
+        state = search.checker.extend(search.root, {r['aircraft']: r['waypoints'] for r in plan['routes']})
+        self.assertNotIn('U', state.served)
+        repaired = search.repair(state, 0)
+        self.assertIn('U', repaired.served)
+        self.assertGreater(repaired.score, state.score)
+        result = evaluate(sc, repaired.plan(sc.seed))
+        self.assertTrue(result.valid)
+        self.assertAlmostEqual(result.score, repaired.score)
+
     def test_expired_budget_returns_valid_empty_plan(self):
         sc = scenario()
         search = Search(sc, seconds=0)
