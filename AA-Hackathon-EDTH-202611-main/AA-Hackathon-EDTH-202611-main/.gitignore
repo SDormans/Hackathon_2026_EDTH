@@ -1,0 +1,7 @@
+__pycache__/
+*.pyc
+.DS_Store
+scenario.json
+plan.json
+plan.svg
+.fleetkit-board.json
