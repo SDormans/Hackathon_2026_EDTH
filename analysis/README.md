@@ -70,7 +70,7 @@ For every matrix cell, the script builds a real isolated mini-plan (the best sco
 | **infeasible** | **yes** | **0** |
 | infeasible | no | 133 (15%) |
 
-- **It never wrongly rules anything out.** Its "no" is always right, so it is safe for pruning.
+- **No false exclusions were observed in this sample.** The isolated-route checker is itself a heuristic, so this is not proof that every matrix rejection is sound. The planner uses estimated energy/time to rank candidates, not to exclude them.
 - **It's slightly optimistic:** 100% right at L2, about 87% at L3. The misses were:
   - **64 on separation (R8).** These are 3–4-effector strikes where the test harness didn't deconflict hard enough. They're fixable, not unreachable. The first run had 246 of these; adding altitude-layer rotation cleared most of them.
   - **16 because no scout can confirm in time.** This is the matrix's **one real gap**. Next step: add a scout check per contact.
@@ -85,3 +85,11 @@ For every matrix cell, the script builds a real isolated mini-plan (the best sco
 5. Later, local search on the best plan: swap effectors, drop and re-add contacts, slow aircraft down to save energy.
 
 **Speed is the blocker.** One baseline greedy run takes 0.23 s at L2, 1.5 s at L3 and **6.6 s at L4**: only about 8 random restarts at L4. The cause is that it re-validates the **whole** plan after every insertion, and R8 compares every pair of aircraft. **First engineering task:** incremental checking (only the new routes against the accepted ones), with one full official validation at the end as a safety net.
+
+## 7. Implemented search planner
+
+The executable planner is now at [`../planner.py`](../planner.py), with usage and design details in [`../README.md`](../README.md). It uses the matrix estimates for ranking and the baseline route builders to grow a bounded beam tree, maintaining a separate archive of the best N distinct timed plans. Skip branches preserve resources for later contacts.
+
+Incremental validation runs the official local rules on changed routes, rechecks R4/R10 on the combined plan, and runs the official R8 pair checker for every pair involving a changed route. The winners still receive a full official validation. The default search stops at 55 seconds from startup, leaving room inside the 60-second limit to validate and write the result.
+
+`check_matrix.py` remains an isolated-mission diagnostic. A successful cell does not establish compatibility with other contacts' aircraft.
