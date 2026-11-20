@@ -114,6 +114,25 @@ def run_planner(command, scenario, plan_path, log_path, timeout, env):
                 note=note, returncode=returncode)
 
 
+DIAGNOSTIC_KEYS = ('passes', 'candidate_checks', 'rejections', 'unserved', 'unserved_points')
+
+
+def read_diagnostics(log_path):
+    """The planner's final stderr JSON line: passes, rejections, unserved reasons."""
+    try:
+        lines = log_path.read_text(encoding='utf-8', errors='replace').splitlines()
+    except OSError:
+        return {}
+    for line in reversed(lines):
+        if line.startswith('{'):
+            try:
+                data = json.loads(line)
+            except ValueError:
+                return {}
+            return {key: data[key] for key in DIAGNOSTIC_KEYS if key in data}
+    return {}
+
+
 def empty_result():
     return dict(status='not_run', score=0.0, seconds=0.0, served=[], note='', returncode=None)
 
@@ -138,6 +157,8 @@ def run_case(level, seed, output, seconds, timeout, planner_path):
         search = run_planner([sys.executable, str(planner_path), str(scenario_path),
                               str(folder / 'search.plan.json'), '--seconds', str(seconds)],
                              scenario, folder / 'search.plan.json', folder / 'search.log', timeout, env)
+        if search['status'] == 'ok':
+            row['diagnostics'] = read_diagnostics(folder / 'search.log')
     except Exception as exc:
         row['generation_status'] = 'error'
         row['generation_note'] = f'{type(exc).__name__}: {exc}'
@@ -152,8 +173,19 @@ def percent(delta, baseline):
     return 100.0*delta/baseline if baseline > 0 else None
 
 
+def add_counts(total, counts):
+    for key, value in (counts or {}).items():
+        total[key] = total.get(key, 0) + value
+    return total
+
+
 def summarize(rows):
     eligible = [r for r in rows if r['generation_status'] == 'ok']
+    unserved, unserved_points = {}, {}
+    for r in eligible:
+        add_counts(unserved, r.get('diagnostics', {}).get('unserved'))
+        add_counts(unserved_points, r.get('diagnostics', {}).get('unserved_points'))
+    unserved_points = dict(sorted(unserved_points.items(), key=lambda kv: -kv[1]))
     baseline = sum(r['baseline_score'] for r in eligible)
     score = sum(r['search_score'] for r in eligible)
     return dict(cases=len(rows), compared=len(eligible), baseline_score=baseline,
@@ -172,7 +204,10 @@ def summarize(rows):
                                       if eligible else 0.0,
                 max_search_seconds=max((r['search_seconds'] for r in eligible), default=0.0),
                 total_baseline_seconds=sum(r['baseline_seconds'] for r in eligible),
-                total_search_seconds=sum(r['search_seconds'] for r in eligible))
+                total_search_seconds=sum(r['search_seconds'] for r in eligible),
+                passes=[r.get('diagnostics', {}).get('passes') for r in eligible],
+                unserved={key: unserved[key] for key in unserved_points},
+                unserved_points=unserved_points)
 
 
 def pct_label(value):
@@ -220,6 +255,18 @@ def write_report(output, rows, settings, elapsed, complete):
                      f"<a href='{folder}/greedy.plan.json'>greedy</a> · "
                      f"<a href='{folder}/search.plan.json'>ours</a> · "
                      f"<a href='{folder}/search.log'>log</a></td><td>{escape(note)}</td></tr>")
+    reasons = list(total['unserved_points'])
+    why = []
+    for label, aggregate in [('TOTAL', total), *by_level.items()]:
+        cells = ''.join(f"<td>{aggregate['unserved'].get(k, 0)} · {aggregate['unserved_points'].get(k, 0):.0f} pts</td>"
+                        for k in reasons)
+        why.append(f"<tr><th>{label}</th>{cells}</tr>")
+    why_table = (f"<h2>Why contacts were not served (our plan)</h2><p>Contacts · points lost, by primary reason. "
+                 f"collateral_ban can never be served (R7). never_tried and time_cap mean the search did not "
+                 f"get to it; outranked means a valid serve existed in a branch that lost.</p>"
+                 f"<div class='scroll'><table><thead><tr><th>Level</th>"
+                 f"{''.join(f'<th>{escape(k)}</th>' for k in reasons)}</tr></thead><tbody>{''.join(why)}</tbody></table></div>"
+                 if reasons else '')
     warning = ('Parallel runs share CPU and can reduce search quality and affect timing. '
                'Use one worker for a representative comparison.' if settings['workers'] > 1
                else 'Single-worker run: scenarios execute sequentially.')
@@ -239,6 +286,7 @@ Crashes, timeouts, missing or invalid plans score zero. Scenario setup failures 
 <div class="scroll"><table><thead><tr><th>Level</th><th>Cases</th><th>Greedy score</th><th>Our score</th>
 <th>Gain</th><th>Gain %</th><th>Wins / ties / losses</th><th>Our valid outputs</th></tr></thead>
 <tbody>{''.join(table)}</tbody></table></div>
+{why_table}
 <p>Our failures: {total['search_failures']} ({total['search_timeouts']} timeouts) · Greedy failures: {total['baseline_failures']}
 ({total['baseline_timeouts']} timeouts) · Setup failures: {total['setup_failures']} · Slowest search: {total['max_search_seconds']:.2f} s</p>
 <p>Ranking uses the sum of raw scores. Gain % is calculated from summed scores, rather than averaging percentages.
@@ -311,6 +359,11 @@ def main(argv=None):
         print(f" {level:<5} greedy {s['baseline_score']:10.2f}  ours {s['search_score']:10.2f}  "
               f"gain {s['improvement']:+10.2f} ({pct_label(s['improvement_pct'])})  "
               f"W/T/L {s['wins']}/{s['ties']}/{s['losses']}  valid {s['search_valid']}/{s['compared']}")
+    if summary['total']['unserved_points']:
+        print('\n Unserved contacts in our plans (count, points lost)')
+        for level, s in [('TOTAL', summary['total']), *summary['levels'].items()]:
+            parts = [f"{k} {s['unserved'][k]} ({s['unserved_points'][k]:.0f})" for k in s['unserved_points']]
+            print(f" {level:<5} " + ', '.join(parts))
     total = summary['total']
     print(f" Failures: ours {total['search_failures']}, greedy {total['baseline_failures']}, setup {total['setup_failures']}")
     print(f'Report: {output / "report.html"}')

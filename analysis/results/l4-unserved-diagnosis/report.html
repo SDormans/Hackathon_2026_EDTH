@@ -1,0 +1,24 @@
+<!doctype html><html lang="en"><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1"><title>Fleet benchmark</title>
+<style>body{font:15px system-ui;background:#111827;color:#e5e7eb;margin:30px}h1{margin-bottom:8px}
+p{max-width:1000px;line-height:1.5;color:#cbd5e1}a{color:#93c5fd}table{border-collapse:collapse;margin:20px 0;width:100%}
+th,td{padding:10px;text-align:right;border-bottom:1px solid #374151;white-space:nowrap}th:first-child,td:first-child{text-align:left}
+thead{background:#1f2937}.win td:nth-child(4){color:#86efac}.loss td:nth-child(4){color:#fca5a5}
+.scroll{overflow:auto}.notice{padding:12px;background:#1f2937;border-left:3px solid #60a5fa}
+</style><h1>Fleet planner versus greedy</h1>
+<p>Complete · 3/3 cases · 244.9 s elapsed ·
+1 worker(s) · 55 s search budget · 60 s process limit</p>
+<p class="notice">Single-worker run: scenarios execute sequentially. Both planners run in separate processes with the same hard timeout.
+Crashes, timeouts, missing or invalid plans score zero. Scenario setup failures are excluded from score comparisons.</p>
+<div class="scroll"><table><thead><tr><th>Level</th><th>Cases</th><th>Greedy score</th><th>Our score</th>
+<th>Gain</th><th>Gain %</th><th>Wins / ties / losses</th><th>Our valid outputs</th></tr></thead>
+<tbody><tr><th>TOTAL</th><td>3</td><td>1354.26</td><td>1798.76</td><td>+444.50</td><td>+32.8%</td><td>3 / 0 / 0</td><td>3 / 3</td></tr><tr><th>L4</th><td>3</td><td>1354.26</td><td>1798.76</td><td>+444.50</td><td>+32.8%</td><td>3 / 0 / 0</td><td>3 / 3</td></tr></tbody></table></div>
+<h2>Why contacts were not served (our plan)</h2><p>Contacts · points lost, by primary reason. collateral_ban can never be served (R7). never_tried and time_cap mean the search did not get to it; outranked means a valid serve existed in a branch that lost.</p><div class='scroll'><table><thead><tr><th>Level</th><th>scout_route</th><th>collateral_ban</th><th>outranked</th><th>scout_rule:R1</th><th>time_cap</th><th>scout_rule:R3</th><th>scout_rule:R8</th></tr></thead><tbody><tr><th>TOTAL</th><td>46 · 2665 pts</td><td>36 · 2460 pts</td><td>42 · 2117 pts</td><td>21 · 775 pts</td><td>3 · 209 pts</td><td>3 · 163 pts</td><td>3 · 153 pts</td></tr><tr><th>L4</th><td>46 · 2665 pts</td><td>36 · 2460 pts</td><td>42 · 2117 pts</td><td>21 · 775 pts</td><td>3 · 209 pts</td><td>3 · 163 pts</td><td>3 · 153 pts</td></tr></tbody></table></div>
+<p>Our failures: 0 (0 timeouts) · Greedy failures: 0
+(0 timeouts) · Setup failures: 0 · Slowest search: 55.32 s</p>
+<p>Ranking uses the sum of raw scores. Gain % is calculated from summed scores, rather than averaging percentages.
+Inspect individual plans with the official flight viewer. This report refreshes every five seconds while running.</p>
+<div class="scroll"><table><thead><tr><th>Scenario</th><th>Greedy</th><th>Ours</th><th>Gain</th><th>Gain %</th>
+<th>Greedy s</th><th>Our s</th><th>Greedy / our status</th><th>Files</th><th>Failure details</th></tr></thead>
+<tbody><tr class='win'><td>L4:0</td><td>590.34</td><td>834.78</td><td>+244.43</td><td>+41.4%</td><td>14.48</td><td>55.31</td><td>ok / ok</td><td><a href='L4-0/scenario.json'>scenario</a> · <a href='L4-0/greedy.plan.json'>greedy</a> · <a href='L4-0/search.plan.json'>ours</a> · <a href='L4-0/search.log'>log</a></td><td></td></tr><tr class='win'><td>L4:1</td><td>432.46</td><td>522.81</td><td>+90.36</td><td>+20.9%</td><td>26.07</td><td>55.32</td><td>ok / ok</td><td><a href='L4-1/scenario.json'>scenario</a> · <a href='L4-1/greedy.plan.json'>greedy</a> · <a href='L4-1/search.plan.json'>ours</a> · <a href='L4-1/search.log'>log</a></td><td></td></tr><tr class='win'><td>L4:2</td><td>331.46</td><td>441.17</td><td>+109.71</td><td>+33.1%</td><td>25.15</td><td>55.27</td><td>ok / ok</td><td><a href='L4-2/scenario.json'>scenario</a> · <a href='L4-2/greedy.plan.json'>greedy</a> · <a href='L4-2/search.plan.json'>ours</a> · <a href='L4-2/search.log'>log</a></td><td></td></tr></tbody></table></div><p>Source: planner.py.
+<a href="results.csv">CSV</a> · <a href="results.json">JSON</a> · <a href="summary.json">Summary and settings</a></p></html>

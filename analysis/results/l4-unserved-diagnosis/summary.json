@@ -1,0 +1,108 @@
+{
+ "settings": {
+  "seconds": 55.0,
+  "timeout": 60,
+  "workers": 1,
+  "cases": [
+   "L4:0",
+   "L4:1",
+   "L4:2"
+  ],
+  "planner": "planner.py",
+  "started_utc": "2026-11-20T19:27:46.007602+00:00"
+ },
+ "complete": true,
+ "elapsed_seconds": 244.94027526400168,
+ "completed": 3,
+ "requested": 3,
+ "total": {
+  "cases": 3,
+  "compared": 3,
+  "baseline_score": 1354.2554140870836,
+  "search_score": 1798.7602352512827,
+  "improvement": 444.50482116419903,
+  "improvement_pct": 32.82282031442672,
+  "wins": 3,
+  "ties": 0,
+  "losses": 0,
+  "search_valid": 3,
+  "search_failures": 0,
+  "baseline_failures": 0,
+  "setup_failures": 0,
+  "search_timeouts": 0,
+  "baseline_timeouts": 0,
+  "median_search_seconds": 55.31175425499896,
+  "max_search_seconds": 55.32430965000094,
+  "total_baseline_seconds": 65.70333990200015,
+  "total_search_seconds": 165.90855834499962,
+  "passes": [
+   5,
+   4,
+   5
+  ],
+  "unserved": {
+   "scout_route": 46,
+   "collateral_ban": 36,
+   "outranked": 42,
+   "scout_rule:R1": 21,
+   "time_cap": 3,
+   "scout_rule:R3": 3,
+   "scout_rule:R8": 3
+  },
+  "unserved_points": {
+   "scout_route": 2665.0,
+   "collateral_ban": 2460.0,
+   "outranked": 2117.0,
+   "scout_rule:R1": 775.0,
+   "time_cap": 209.0,
+   "scout_rule:R3": 163.0,
+   "scout_rule:R8": 153.0
+  }
+ },
+ "levels": {
+  "L4": {
+   "cases": 3,
+   "compared": 3,
+   "baseline_score": 1354.2554140870836,
+   "search_score": 1798.7602352512827,
+   "improvement": 444.50482116419903,
+   "improvement_pct": 32.82282031442672,
+   "wins": 3,
+   "ties": 0,
+   "losses": 0,
+   "search_valid": 3,
+   "search_failures": 0,
+   "baseline_failures": 0,
+   "setup_failures": 0,
+   "search_timeouts": 0,
+   "baseline_timeouts": 0,
+   "median_search_seconds": 55.31175425499896,
+   "max_search_seconds": 55.32430965000094,
+   "total_baseline_seconds": 65.70333990200015,
+   "total_search_seconds": 165.90855834499962,
+   "passes": [
+    5,
+    4,
+    5
+   ],
+   "unserved": {
+    "scout_route": 46,
+    "collateral_ban": 36,
+    "outranked": 42,
+    "scout_rule:R1": 21,
+    "time_cap": 3,
+    "scout_rule:R3": 3,
+    "scout_rule:R8": 3
+   },
+   "unserved_points": {
+    "scout_route": 2665.0,
+    "collateral_ban": 2460.0,
+    "outranked": 2117.0,
+    "scout_rule:R1": 775.0,
+    "time_cap": 209.0,
+    "scout_rule:R3": 163.0,
+    "scout_rule:R8": 153.0
+   }
+  }
+ }
+}

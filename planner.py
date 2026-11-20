@@ -57,7 +57,8 @@ def main():
         save_json(report, args.artifacts / "tree.json")
         save_tree(report, args.artifacts / "tree.html")
     print(json.dumps({key: report[key] for key in
-                      ("elapsed_s", "passes", "candidate_checks", "solutions")}), file=sys.stderr)
+                      ("elapsed_s", "passes", "candidate_checks", "rejections",
+                       "unserved", "unserved_points", "solutions")}), file=sys.stderr)
 
 
 if __name__ == "__main__":

@@ -25,6 +25,40 @@ class DeadlineReached(Exception):
     pass
 
 
+# How far one attempt to serve a contact got, from least to most progress.
+# An attempt is one call to Search.children for one parent node.
+STAGES = ("no_options", "no_team", "scout_route", "scout_rule", "strike_route",
+          "strike_rule", "not_improving", "accepted")
+
+
+def outcome_stage(outcome):
+    return outcome.split(":", 1)[0]
+
+
+def unserved_reason(contact, banned, stats):
+    """One primary reason why a contact is missing from the winning plan.
+
+    collateral_ban / no_window: excluded before the search.
+    never_tried: no attempt ran (the pass order or the deadline never reached it).
+    outranked: some branch served it validly, but that branch did not win.
+    Otherwise the most common attempt outcome, e.g. "scout_rule:R4", "time_cap".
+    """
+    if contact.id in banned:
+        return "collateral_ban"
+    if contact.window is None:
+        return "no_window"
+    if stats is None or (not stats["attempts"] and not stats["warm_accepted"]):
+        return "never_tried"
+    outcomes = stats["outcomes"]
+    if stats["warm_accepted"] or outcomes.get("accepted"):
+        return "outranked"
+    if not outcomes:
+        return "never_tried"
+    # Most frequent outcome; ties go to the attempt that got furthest.
+    order = {name: i for i, name in enumerate(STAGES)}
+    return max(outcomes, key=lambda o: (outcomes[o], order.get(outcome_stage(o), -1), o))
+
+
 @dataclass
 class State:
     routes: dict
@@ -61,6 +95,7 @@ class IncrementalValidator:
         self.calls = 0
         self.seconds = 0.0
         self.rejections = {}
+        self.last_rule = None
 
     def check_time(self, stop=None):
         if time.monotonic() >= min(self.stop, stop if stop is not None else self.stop):
@@ -68,6 +103,7 @@ class IncrementalValidator:
 
     def reject(self, violations):
         key = violations[0].rule
+        self.last_rule = key
         self.rejections[key] = self.rejections.get(key, 0) + 1
         return None
 
@@ -163,6 +199,13 @@ class Search:
         self.signatures = {self.root.signature()}
         self.matrix = None
         self.passes = 0
+        # Per-contact attempt accounting for "why was this contact not served".
+        self.attempts = {}
+
+    def stats(self, cid):
+        if cid not in self.attempts:
+            self.attempts[cid] = {"attempts": 0, "warm_accepted": 0, "outcomes": {}, "rules": {}}
+        return self.attempts[cid]
 
     def record(self, state, parent, decision, depth):
         # Trace stores metadata, not full copies of every discarded plan.
@@ -188,15 +231,42 @@ class Search:
             self.checker.check_time(stop)
             accepted = p.serve_hostile(c) if c.cls == HOSTILE else p.serve_unknown(c)
             if accepted:
+                self.stats(c.id)["warm_accepted"] += 1
                 state = replace(p.last, tasks=dict(p.tasks))
                 p.state = self.record(state, p.state, {"kind": "greedy", "contact": c.id}, depth)
 
     def children(self, parent, contact, stop, limit=2):
-        """Bounded candidate generation: alternate scouts, teams and flight settings."""
+        """Bounded candidate generation, recording how far each attempt got."""
         if contact.id in parent.served:
             return
+        stats = self.stats(contact.id)
+        stats["attempts"] += 1
+        progress = {"stage": -1, "outcome": "no_options"}
+        outcome = None
+        try:
+            yield from self._children(parent, contact, stop, limit, stats, progress)
+            outcome = progress["outcome"]
+        except DeadlineReached:
+            outcome = "accepted" if progress["outcome"] == "accepted" else "time_cap"
+            raise
+        finally:
+            if outcome is None:  # Closed early by the consumer.
+                outcome = progress["outcome"]
+            stats["outcomes"][outcome] = stats["outcomes"].get(outcome, 0) + 1
+
+    @staticmethod
+    def _progress(stats, progress, outcome):
+        stage = STAGES.index(outcome_stage(outcome))
+        if ":" in outcome:
+            stats["rules"][outcome] = stats["rules"].get(outcome, 0) + 1
+        if stage >= progress["stage"]:
+            progress["stage"], progress["outcome"] = stage, outcome
+
+    def _children(self, parent, contact, stop, limit, stats, progress):
+        """Bounded candidate generation: alternate scouts, teams and flight settings."""
         groups = self.matrix.groups(contact, parent.used) if contact.cls == HOSTILE else [()]
         if not groups:
+            self._progress(stats, progress, "no_team")
             return
         p = _Planner(self.sc)
         p.tasks = parent.tasks
@@ -211,20 +281,24 @@ class Search:
             self.checker.check_time(stop)
             built = p._add_observation(scout, contact, z, obs_angle, shift)
             if built is None:
+                self._progress(stats, progress, "scout_route")
                 continue
             tasks, route = built
             scout_extra = {scout.id: route}
             scout_state = self.checker.extend(parent, scout_extra)
             if scout_state is None:
+                self._progress(stats, progress, f"scout_rule:{self.checker.last_rule}")
                 continue
             if contact.cls == UNKNOWN:
                 options = [(scout_state, ())]
             else:
                 obs_end = max(w["t"] + w.get("dwell_s", 0) for w in route
                               if w.get("target") == contact.id and w.get("action") == "observe")
-                options = self.strikes(parent, contact, groups, scout, route, obs_end, stop)
+                options = self.strikes(parent, contact, groups, scout, route, obs_end, stop,
+                                       stats, progress)
             for candidate, team in options:
                 if candidate.score <= parent.score:
+                    self._progress(stats, progress, "not_improving")
                     continue
                 signature = candidate.signature()
                 if signature in seen:
@@ -233,12 +307,14 @@ class Search:
                 candidate.tasks = {**parent.tasks, scout.id: tasks}
                 decision = {"kind": "serve", "contact": contact.id, "scout": scout.id,
                             "effectors": [a.id for a in team]}
+                self._progress(stats, progress, "accepted")
                 yield candidate, decision
                 count += 1
                 if count >= limit:
                     return
 
-    def strikes(self, parent, contact, groups, scout, scout_route, obs_end, stop):
+    def strikes(self, parent, contact, groups, scout, scout_route, obs_end, stop,
+                stats=None, progress=None):
         base = max(obs_end + self.sc.rules.confirm_margin_s + 2.0, contact.window[0])
         # Try cheap alternatives to the nearest team. At most one child per team
         # for each scout setting, avoiding a beam filled with timing variants.
@@ -257,8 +333,12 @@ class Search:
                         break
                     extra[eff.id] = route
                 if len(extra) != len(team)+1:
+                    if stats is not None:
+                        self._progress(stats, progress, "strike_route")
                     continue
                 candidate = self.checker.extend(parent, extra)
+                if candidate is None and stats is not None:
+                    self._progress(stats, progress, f"strike_rule:{self.checker.last_rule}")
                 if candidate is not None:
                     yield candidate, team
                     found = True
@@ -328,13 +408,40 @@ class Search:
         verified.sort(key=lambda pair: -pair[1].score)
         return verified
 
+    def diagnostics(self, served):
+        """Per-contact accounting against the winner's served set."""
+        banned = self.matrix.banned if self.matrix is not None else CandidateMatrix(self.sc).banned
+        served = set(served)
+        contacts, summary, points = {}, {}, {}
+        for c in self.sc.contacts:
+            if c.cls not in (HOSTILE, UNKNOWN):
+                continue
+            stats = self.attempts.get(c.id)
+            entry = {"cls": c.cls, "points": c.points, "served": c.id in served,
+                     "attempts": stats["attempts"] if stats else 0,
+                     "outcomes": dict(stats["outcomes"]) if stats else {},
+                     "rules": dict(stats["rules"]) if stats else {}}
+            if c.id not in served:
+                reason = unserved_reason(c, banned, stats)
+                entry["reason"] = reason
+                summary[reason] = summary.get(reason, 0) + 1
+                points[reason] = points.get(reason, 0) + c.points
+            contacts[c.id] = entry
+        return {"contacts": contacts,
+                "unserved": dict(sorted(summary.items(), key=lambda kv: -points[kv[0]])),
+                "unserved_points": dict(sorted(points.items(), key=lambda kv: -kv[1]))}
+
     def report(self, verified):
+        diagnostics = self.diagnostics(verified[0][1].served if verified else [])
         return {"seed": self.sc.seed, "elapsed_s": time.monotonic()-self.start,
                 "search_budget_s": max(0, self.stop-self.start), "passes": self.passes,
                 "candidate_checks": self.checker.calls,
                 "candidate_check_seconds": self.checker.seconds,
                 "rejections": self.checker.rejections,
                 "beam_width": self.width, "requested_top_n": self.top_n,
+                "unserved": diagnostics["unserved"],
+                "unserved_points": diagnostics["unserved_points"],
+                "contacts": diagnostics["contacts"],
                 "solutions": [{"rank": i, "node": state.node_id, "score": result.score,
                                "served": result.served} for i, (state, result) in enumerate(verified, 1)],
                 "nodes": self.trace}

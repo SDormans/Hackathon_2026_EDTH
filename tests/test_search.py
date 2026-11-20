@@ -17,7 +17,7 @@ sys.path.insert(0, str(ROOT))
 # Entry point also supplies the local fleetkit discovery used by these tests.
 import planner
 from candidate_matrix import CandidateMatrix
-from search_planner import IncrementalValidator, Search
+from search_planner import IncrementalValidator, Search, unserved_reason
 from fleetkit.baseline import greedy_plan
 from fleetkit.generator import generate
 from fleetkit.model import Scenario, save_json
@@ -186,6 +186,97 @@ class SearchTests(unittest.TestCase):
             self.assertTrue(report['solutions'])
             for p in (work / 'artifacts').glob('plan-*.json'):
                 self.assertTrue(evaluate(parsed, json.loads(p.read_text())).valid)
+
+
+
+def diagnostic_scenario():
+    """One contact per failure reason, next to the servable B and C."""
+    sc = scenario()
+    data = dict(seed=1, level='test', horizon_s=900, zones=[], aircraft=[
+        dict(id=a.id, type=a.type, subtype=a.subtype, home=list(a.home), v_h_mps=a.v_h_mps,
+             v_up_mps=a.v_up_mps, v_down_mps=a.v_down_mps, capacity_wh=a.capacity_wh,
+             battery_pct=a.battery_pct, power=dict(p0_w=a.power.p0_w, k_v=a.power.k_v,
+                                                  e_climb_wh_per_m=a.power.e_climb_wh_per_m))
+        for a in sc.aircraft])
+    # A spare light, so EARLY reaches the scout stage instead of running out of team.
+    spare = dict(data['aircraft'][-1], id='effector2', home=[0, 240, 0])
+    data['aircraft'].append(spare)
+    hostile = lambda cid, pos, needs, window, points=60: dict(
+        id=cid, **{'class': 'hostile'}, pos=pos, points=points, engage_needs=needs, window_s=window)
+    data['contacts'] = [
+        hostile('B', [1300, 500, 0], {'light': 1}, [100, 800], 70),
+        hostile('C', [1300, -500, 0], {'light': 1}, [100, 800], 70),
+        # A civilian inside the collateral radius: R7 forbids engaging it.
+        hostile('BAN', [-1500, 0, 0], {'light': 1}, [100, 800]),
+        dict(id='CIV', **{'class': 'civilian'}, pos=[-1450, 0, 0], window_s=None),
+        # No heavy effector exists.
+        hostile('HEAVY', [1300, 0, 0], {'heavy': 1}, [100, 800]),
+        # Closes before any scout can get there.
+        hostile('EARLY', [2500, 2500, 0], {'light': 1}, [0, 20]),
+    ]
+    return Scenario.from_dict(data)
+
+
+class DiagnosticsTests(unittest.TestCase):
+    def stats(self, outcomes, attempts=None, warm=0):
+        return {'attempts': sum(outcomes.values()) if attempts is None else attempts,
+                'warm_accepted': warm, 'outcomes': outcomes, 'rules': {}}
+
+    def test_reason_classification(self):
+        c = scenario().contacts[0]
+        self.assertEqual(unserved_reason(c, {c.id}, None), 'collateral_ban')
+        self.assertEqual(unserved_reason(replace(c, window=None), set(), None), 'no_window')
+        self.assertEqual(unserved_reason(c, set(), None), 'never_tried')
+        self.assertEqual(unserved_reason(c, set(), self.stats({}, 0)), 'never_tried')
+        self.assertEqual(unserved_reason(c, set(), self.stats({'accepted': 1, 'time_cap': 9})),
+                         'outranked')
+        self.assertEqual(unserved_reason(c, set(), self.stats({}, 0, warm=1)), 'outranked')
+        self.assertEqual(unserved_reason(c, set(), self.stats({'time_cap': 3, 'strike_rule:R8': 1})),
+                         'time_cap')
+        # Ties go to the attempt that got furthest.
+        self.assertEqual(unserved_reason(c, set(), self.stats({'scout_route': 2, 'strike_rule:R8': 2})),
+                         'strike_rule:R8')
+
+    def test_every_unserved_contact_has_its_reason(self):
+        sc = diagnostic_scenario()
+        search = Search(sc, seconds=3.0)
+        verified = search.run()
+        result = verified[0][1]
+        self.assertTrue(result.valid)
+        report = search.report(verified)
+        contacts = report['contacts']
+        self.assertEqual(set(contacts), {'B', 'C', 'BAN', 'HEAVY', 'EARLY'})
+        self.assertEqual({cid for cid, e in contacts.items() if e['served']}, set(result.served))
+        self.assertEqual(set(result.served), {'B', 'C'})
+        reasons = {cid: e['reason'] for cid, e in contacts.items() if not e['served']}
+        self.assertEqual(reasons['BAN'], 'collateral_ban')
+        self.assertEqual(reasons['HEAVY'], 'no_team')
+        self.assertTrue(reasons['EARLY'].startswith('scout_'), reasons['EARLY'])
+        self.assertEqual(sum(report['unserved'].values()), 3)
+        self.assertEqual(sum(report['unserved_points'].values()), 180)
+
+    def test_expired_budget_reports_never_tried(self):
+        sc = diagnostic_scenario()
+        search = Search(sc, seconds=0)
+        report = search.report(search.run())
+        reasons = {cid: e.get('reason') for cid, e in report['contacts'].items()}
+        self.assertEqual(reasons['BAN'], 'collateral_ban')
+        self.assertEqual({r for cid, r in reasons.items() if cid != 'BAN'}, {'never_tried'})
+
+    def test_generated_scenario_accounting_is_complete(self):
+        sc = Scenario.from_dict(generate('L2', 3))
+        search = Search(sc, seconds=2.0)
+        verified = search.run()
+        report = search.report(verified)
+        served = set(verified[0][1].served)
+        targets = {c.id for c in sc.contacts if c.cls in ('hostile', 'unknown')}
+        self.assertEqual(set(report['contacts']), targets)
+        for cid, entry in report['contacts'].items():
+            self.assertEqual(entry['served'], cid in served)
+            self.assertEqual('reason' in entry, cid not in served)
+            self.assertEqual(sum(entry['outcomes'].values()), entry['attempts'])
+        self.assertEqual(sum(report['unserved'].values()), len(targets - served))
+        self.assertEqual(set(report['unserved']), set(report['unserved_points']))
 
 
 if __name__ == '__main__':

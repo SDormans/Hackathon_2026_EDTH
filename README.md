@@ -130,6 +130,38 @@ A separate **55-second L4-0** run scored **847.12** and completed in **55.15 sec
 
 A later audit of 12 additional five-second runs produced 10 wins and two losses against greedy; the combined short-budget score was lower. Repeating the two regressions at 55 seconds produced a win on L4-1 (574.11 vs 432.46) and a tie on L4-13 (1045.75). Both completed within 55.26 seconds. Use the normal budget for quality comparisons; the small table above is not evidence of universal improvement.
 
+### Why contacts go unserved
+
+Every run records, for each hostile and unknown contact, how far each attempt to serve it got. Each contact missing from the winning plan gets one primary reason. The planner's stderr line includes `unserved` (count per reason), `unserved_points` and `rejections`, and `--artifacts` writes per-contact detail to `tree.json`. The benchmark sums these per level in its console summary and `report.html`.
+
+| Reason | Meaning |
+|---|---|
+| `collateral_ban` | A friendly or civilian is inside the collateral radius. R7 forbids the strike, so these points are never available. |
+| `no_window` | The contact has no time window. |
+| `never_tried` | No attempt ran: no pass reached it before the deadline. |
+| `time_cap` | Attempts ran out of their per-node time before finding a valid child. |
+| `no_team` | Not enough free effectors of the needed subtypes in that branch. |
+| `scout_route` | The baseline scout builder could not fit the visit into the window when appended to the scout's tour. |
+| `scout_rule:Rn` / `strike_rule:Rn` | The scout or strike routes failed official rule Rn. |
+| `not_improving` | A valid serve existed but did not raise the score. |
+| `outranked` | A valid serve existed in some branch, but that branch did not win. |
+
+The most common attempt outcome is the reason. Ties go to the attempt that got furthest.
+
+**L4 diagnosis (seeds 0–2, 55 s, one worker; 1798.76 vs greedy 1354.26).** 154 targets were missed, worth 8,542 points:
+
+| Reason | Contacts | Points |
+|---|---|---|
+| `scout_route` | 46 | 2665 |
+| `collateral_ban` | 36 | 2460 |
+| `outranked` | 42 | 2117 |
+| `scout_rule:R1` | 21 | 775 |
+| `time_cap` | 3 | 209 |
+| `scout_rule:R3` | 3 | 163 |
+| `scout_rule:R8` | 3 | 153 |
+
+Scout failures account for 73 contacts and 3,756 points. A direct-flight check (`python3 analysis/scout_reach.py analysis/results/l4-unserved-diagnosis`) shows only 8 non-banned targets across the three scenarios that no scout can observe in time even flying straight from base at full speed (ignoring zones). Most scout failures therefore come from how tours are built (append-only, four nearest candidates), not from physics. `outranked` is the second lever: valid serves existed but the beam kept other branches. Time limits are a small factor (3 contacts). Collateral bans are unavailable points: they make "available points" totals look larger than what any plan can reach. Each L4 run completed 4–5 passes. The full run (report, scenarios, plans and logs) is committed in [analysis/results/l4-unserved-diagnosis/](analysis/results/l4-unserved-diagnosis/report.html).
+
 A generated L2-7 demo is available locally at `output/search/tree.html`, with its winning fleet animation at `output/flight.html`. Generated outputs are ignored by Git; use `--artifacts` to reproduce them.
 
 ## Hand-in

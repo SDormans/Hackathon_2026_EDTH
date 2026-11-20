@@ -52,6 +52,26 @@ class SummaryTests(unittest.TestCase):
         self.assertEqual(summary['improvement_pct'], 0)
         self.assertIsNone(bench.percent(5, 0))
 
+    def test_unserved_reasons_are_summed(self):
+        a, b = self.row(1, 2), self.row(1, 2)
+        a['diagnostics'] = {'unserved': {'time_cap': 2, 'collateral_ban': 1},
+                            'unserved_points': {'time_cap': 100, 'collateral_ban': 60}}
+        b['diagnostics'] = {'unserved': {'time_cap': 1}, 'unserved_points': {'time_cap': 40}}
+        s = bench.summarize([a, b, self.row(1, 1)])
+        self.assertEqual(s['unserved'], {'time_cap': 3, 'collateral_ban': 1})
+        self.assertEqual(list(s['unserved_points']), ['time_cap', 'collateral_ban'])
+        self.assertEqual(s['unserved_points']['time_cap'], 140)
+
+    def test_read_diagnostics_from_log(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            log = Path(tmp) / 'search.log'
+            log.write_text('warning: noise\n' + json.dumps(
+                {'passes': 3, 'unserved': {'never_tried': 1}, 'solutions': []}) + '\n')
+            self.assertEqual(bench.read_diagnostics(log), {'passes': 3, 'unserved': {'never_tried': 1}})
+            log.write_text('crashed\n')
+            self.assertEqual(bench.read_diagnostics(log), {})
+            self.assertEqual(bench.read_diagnostics(Path(tmp) / 'missing.log'), {})
+
     def test_gain_uses_summed_scores(self):
         s = bench.summarize([self.row(1, 2), self.row(100, 100)])
         self.assertAlmostEqual(s['improvement_pct'], 100/101)
@@ -124,6 +144,13 @@ class BatchIntegrationTests(unittest.TestCase):
                 sc = Scenario.from_dict(load_json(folder / 'scenario.json'))
                 for name in ['greedy.plan.json', 'search.plan.json']:
                     self.assertTrue(evaluate(sc, load_json(folder / name)).valid)
+                # Every target our plan missed is accounted for with a reason.
+                targets = {c.id for c in sc.contacts if c.cls in ('hostile', 'unknown')}
+                missed = targets - set(row['served'])
+                self.assertEqual(sum(row['diagnostics']['unserved'].values()), len(missed))
+            self.assertEqual(sum(summary['total']['unserved'].values()),
+                             sum(sum(r['diagnostics']['unserved'].values())
+                                 for r in load_json(output / 'results.json')))
             # Output directories cannot silently overwrite a previous run.
             again = self.run_batch(output)
             self.assertEqual(again.returncode, 2)

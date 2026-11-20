@@ -1,0 +1,12 @@
+{
+ "seconds": 55.0,
+ "timeout": 60,
+ "workers": 1,
+ "cases": [
+  "L4:0",
+  "L4:1",
+  "L4:2"
+ ],
+ "planner": "planner.py",
+ "started_utc": "2026-11-20T19:27:46.007602+00:00"
+}
