@@ -117,6 +117,18 @@ The slowest candidate run finished in 55.23 seconds. Parallel CPU contention can
 python3 analysis/benchmark_search.py --levels L1,L2,L3,L4 --seeds 0-2 --workers 4 --seconds 55
 ```
 
+### Repair and cheaper checks
+
+Same inputs, master vs this change, both with two concurrent benchmark workers per batch running at the same time:
+
+| Batch | Master | With repair | Change |
+|---|---:|---:|---:|
+| 8 public validation scenarios, 55 s | 3768.65 | 3790.20 | +0.6% |
+| L1–L4 seeds 3–4, 55 s | 3164.20 | 3190.15 | +0.8% |
+| L1–L4 seeds 0–2, 20 s (four workers, run separately) | 4417.21 | 4514.93 | +2.2% |
+
+All plans were valid. Gains come from L4 (e.g. L4-401 1077.92 → 1118.71, L4-0 at 20 s 834.78 → 861.03); L1–L3 mostly tie but finish sooner. L4-402 regressed (613.23 → 593.99) and L4-2 at 20 s slightly (447.65 → 446.43): faster checks change which branches fit in the local time caps, so individual cases vary.
+
 ### Local benchmark results
 
 Measured on this machine with five-second search budgets. These are sampled scenarios, not a guarantee of performance on unseen inputs.
