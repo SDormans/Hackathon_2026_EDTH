@@ -11,10 +11,11 @@ import json
 import random
 import time
 
+from fleetkit import baseline
 from fleetkit.baseline import (_Planner, _effector_route, EFFECTOR_LAYERS,
                                SCOUT_LAYERS)
 from fleetkit.energy import route_energy_wh
-from fleetkit.geometry import hdist
+from fleetkit.geometry import EPS, hdist
 from fleetkit.model import HOSTILE, SCOUT, UNKNOWN, parse_plan
 from fleetkit.scorer import evaluate
 from fleetkit import validator as rules
@@ -57,6 +58,26 @@ def unserved_reason(contact, banned, stats):
     # Most frequent outcome; ties go to the attempt that got furthest.
     order = {name: i for i, name in enumerate(STAGES)}
     return max(outcomes, key=lambda o: (outcomes[o], order.get(outcome_stage(o), -1), o))
+
+
+_official_detour = baseline._detour
+_detours = {}
+
+
+def _cached_detour(points, scenario):
+    """Memoised baseline._detour: route builders repeat the same legs many times."""
+    key = (id(scenario), tuple(points))
+    if key not in _detours:
+        if len(_detours) > 200000:
+            _detours.clear()
+        path = _official_detour(points, scenario)
+        _detours[key] = (scenario, None if path is None else tuple(path))
+    path = _detours[key][1]
+    return None if path is None else list(path)
+
+
+# The kit's route builders look _detour up in their module; results are unchanged.
+baseline._detour = _cached_detour
 
 
 @dataclass
@@ -116,7 +137,27 @@ class IncrementalValidator:
         finally:
             self.seconds += time.monotonic() - start
 
+    def quick_reject(self, extra):
+        """Exact subset of R1 (horizon) and R9 (windows) on raw waypoints, before parsing."""
+        horizon = self.sc.horizon_s
+        for route in extra.values():
+            for wp in route:
+                start = wp["t"]
+                end = start + wp.get("dwell_s", 0.0)
+                if start < -EPS or end > horizon + EPS:
+                    return "R1"
+                contact = self.contacts.get(wp.get("target"))
+                if contact is not None and contact.window is not None and wp.get("action"):
+                    lo, hi = contact.window
+                    if start < lo - EPS or (end if wp["action"] == "observe" else start) > hi + EPS:
+                        return "R9"
+        return None
+
     def _extend(self, parent, extra):
+        rule = self.quick_reject(extra)
+        if rule:
+            self.rejections[rule] = self.rejections.get(rule, 0) + 1
+            return None
         plan = {"seed": self.sc.seed, "routes": [
             {"aircraft": aid, "waypoints": route} for aid, route in extra.items()]}
         changed, errors = parse_plan(plan)
@@ -325,6 +366,8 @@ class Search:
                                                              (0.0, 35.0, -35.0), range(3)):
                 self.checker.check_time(stop)
                 arrive = base + delay
+                if arrive + spacing*(len(team)-1) > contact.window[1] + EPS:
+                    break
                 extra = {scout.id: scout_route}
                 for i, eff in enumerate(team):
                     z = EFFECTOR_LAYERS[(i + rotation) % len(EFFECTOR_LAYERS)]

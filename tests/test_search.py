@@ -17,6 +17,7 @@ sys.path.insert(0, str(ROOT))
 # Entry point also supplies the local fleetkit discovery used by these tests.
 import planner
 from candidate_matrix import CandidateMatrix
+import search_planner
 from search_planner import IncrementalValidator, Search, unserved_reason
 from fleetkit.baseline import greedy_plan
 from fleetkit.generator import generate
@@ -88,6 +89,27 @@ class IncrementalTests(unittest.TestCase):
             self.assertEqual(actual is not None, official.valid)
             if actual is not None:
                 self.assertAlmostEqual(actual.score, official.score)
+
+    def test_cached_detour_matches_official(self):
+        sc = Scenario.from_dict(generate('L3', 1))
+        rng = random.Random(3)
+        for _ in range(200):
+            pts = [(rng.uniform(-500, 6000), rng.uniform(-500, 6000), rng.choice([40.0, 70.0, 130.0]))
+                   for _ in range(2)]
+            expected = search_planner._official_detour(list(pts), sc)
+            self.assertEqual(search_planner._cached_detour(list(pts), sc), expected)
+            self.assertEqual(search_planner._cached_detour(list(pts), sc), expected)
+
+    def test_quick_reject_matches_full_validator(self):
+        search, checker = self.checker()
+        aid = next(iter(self.routes))
+        for field, shift in (('t', -10000.0), ('t', 10000.0)):
+            route = copy.deepcopy(self.routes[aid])
+            for wp in route:
+                wp[field] += shift
+            self.assertIsNotNone(checker.quick_reject({aid: route}))
+            self.assertIsNone(checker.extend(search.root, {aid: route}))
+        self.assertIsNone(checker.quick_reject(self.routes))
 
     def test_rebuilt_scout_must_keep_previous_confirmations(self):
         search, checker = self.checker()
