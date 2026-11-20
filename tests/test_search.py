@@ -132,6 +132,19 @@ class IncrementalTests(unittest.TestCase):
         self.assertIsNone(checker.extend(parent, {'duplicate-scout': self.routes[aid]}))
         self.assertIn('R8', checker.rejections)
 
+    def test_signature_identifies_routes(self):
+        search, checker = self.checker()
+        a = checker.extend(search.root, self.routes)
+        b = checker.extend(search.root, copy.deepcopy(self.routes))
+        self.assertEqual(a.signature(), b.signature())
+        aid = next(iter(self.routes))
+        route = copy.deepcopy(self.routes[aid])
+        route[-1]['t'] += 1.0
+        c = checker.extend(a, {aid: route})
+        if c is not None:
+            self.assertNotEqual(a.signature(), c.signature())
+        self.assertNotEqual(search.root.signature(), a.signature())
+
     def test_branches_do_not_mutate_parent(self):
         search, checker = self.checker()
         before = copy.deepcopy(search.root)

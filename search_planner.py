@@ -5,9 +5,8 @@ The matrix ranks candidates; only official rule checks establish validity.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 import itertools
-import json
 import random
 import time
 
@@ -91,13 +90,20 @@ class State:
     served: frozenset
     score: float
     node_id: int = 0
+    keys: dict = field(default_factory=dict)
 
     def plan(self, seed):
         return {"seed": seed, "routes": [
             {"aircraft": aid, "waypoints": self.routes[aid]} for aid in sorted(self.routes)]}
 
     def signature(self):
-        return json.dumps(self.routes, sort_keys=True, separators=(",", ":"))
+        return tuple(sorted(self.keys.items()))
+
+
+def route_key(route):
+    """Hashable identity of a waypoint list; routes are never edited after construction."""
+    return tuple((w["t"], w["x"], w["y"], w["z"], w.get("dwell_s", 0.0), w.get("action"),
+                  w.get("target")) for w in route)
 
 
 class IncrementalValidator:
@@ -201,8 +207,9 @@ class IncrementalValidator:
         score = (sum(self.contacts[cid].points for cid in served)
                  - self.sc.rules.lambda_e * sum(energies.values())
                  - self.sc.rules.c_eff * len(used))
+        keys = {**parent.keys, **{aid: route_key(route) for aid, route in extra.items()}}
         return State({**parent.routes, **extra}, parent.tasks, frozenset(used), parsed,
-                     {**old_items, **new_items}, energies, frozenset(served), score)
+                     {**old_items, **new_items}, energies, frozenset(served), score, keys=keys)
 
 
 class WarmPlanner(_Planner):
