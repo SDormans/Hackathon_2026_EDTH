@@ -871,3 +871,72 @@ class TripPlanTests(unittest.TestCase):
         self.assertLess(time.monotonic() - start, 1.0)
         if state is not None:
             self.assertTrue(evaluate(sc, state.plan(sc.seed)).valid)
+
+
+class GroupTests(unittest.TestCase):
+    """Joint re-plan of n scouts (LNS operator "group")."""
+    @classmethod
+    def setUpClass(cls):
+        cls.sc = Scenario.from_dict(generate('L4', 9))
+        cls.search = Search(cls.sc, seconds=6.0, lns_share=0.0)
+        cls.best = cls.search.run()[0][0]
+        cls.search.checker.stop = time.monotonic() + 60.0
+
+    def test_best_disjoint_matches_brute_force(self):
+        import itertools
+        rng = random.Random(5)
+        for case in range(300):
+            n = rng.choice((2, 3))
+            lists = []
+            for _ in range(n):
+                trips = {(round(rng.uniform(-2, 20), 3), rng.randrange(1, 64)) for _ in range(rng.randint(1, 7))}
+                lists.append(sorted(trips | {(0.0, 0)}, key=lambda t: -t[0]))
+            want = max(sum(t[0] for t in combo) for combo in itertools.product(*lists)
+                       if all(a[1] & b[1] == 0 for a, b in itertools.combinations(combo, 2)))
+            got = search_planner.best_disjoint(lists)
+            self.assertIsNotNone(got, case)
+            value, picks = got
+            self.assertAlmostEqual(value, want, places=6)
+            chosen = [lists[i][k] for i, k in enumerate(picks)]
+            self.assertAlmostEqual(sum(t[0] for t in chosen), value, places=6)
+            for a, b in itertools.combinations(chosen, 2):
+                self.assertEqual(a[1] & b[1], 0)
+            # A floor at the optimum means nothing beats it.
+            self.assertIsNone(search_planner.best_disjoint(lists, want))
+
+    def test_group_move_keeps_plans_valid(self):
+        s = self.search
+        old = search_planner.GROUP_SIZES
+        search_planner.GROUP_SIZES = (2, 3, 4)
+        try:
+            rng = random.Random(4)
+            for _ in range(8):
+                got = s.group_move(self.best, rng)
+                if got is None:
+                    continue
+                partial, removed = got
+                result = evaluate(self.sc, partial.plan(self.sc.seed))
+                self.assertTrue(result.valid, [str(v) for v in result.violations][:3])
+                self.assertAlmostEqual(result.score, partial.score, places=6)
+        finally:
+            search_planner.GROUP_SIZES = old
+        self.assertGreater(s.lns['group_realised'], 0)
+
+    def test_lns_with_group_operator_keeps_or_improves_valid_plans(self):
+        sc = Scenario.from_dict(generate('L4', 10))
+        old = search_planner.GROUP_SIZES, search_planner.GROUP_SHARE, search_planner.TRIP_SHARE
+        search_planner.GROUP_SIZES, search_planner.GROUP_SHARE, search_planner.TRIP_SHARE = (2, 3), 0.8, 0.0
+        try:
+            search = Search(sc, seconds=10.0, lns_share=0.5)
+            contacts, priorities = search.search_phase()
+            before = search.archive[0].score
+            search.improve_phase(contacts, priorities)
+            verified = search.finalize()
+        finally:
+            search_planner.GROUP_SIZES, search_planner.GROUP_SHARE, search_planner.TRIP_SHARE = old
+        self.assertGreater(search.lns['group_tried'], 0)
+        self.assertGreaterEqual(verified[0][1].score, before - 1e-6)
+        self.assertIn('group_improvements', search.report(verified)['lns'])
+        for state, result in verified:
+            self.assertTrue(evaluate(sc, state.plan(sc.seed)).valid)
+            self.assertAlmostEqual(result.score, state.score, places=6)

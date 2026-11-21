@@ -33,7 +33,7 @@ class DeadlineReached(Exception):
     pass
 
 
-DESTROY_OPERATORS = ("random", "related", "worst", "tour", "trip")
+DESTROY_OPERATORS = ("random", "related", "worst", "tour", "trip", "group")
 
 
 # Scout candidate generation.
@@ -846,6 +846,55 @@ def pack_trips(trips, stop=None):
     return total(best), best
 
 
+# Joint re-plan of n scouts (LNS operator "group"): pool the scouts' contacts and the
+# unserved positive-net contacts near them, generate each scout's top trips over that pool
+# with the label search, choose the best combination of disjoint trips and realise it when
+# its estimated value beats the scouts' current trips. Empty: the operator is off.
+GROUP_SIZES = (2, 3, 4)  # random n per move; () turns the operator off
+GROUP_SHARE = 0.2        # share of LNS steps using "group" (without --adaptive)
+GROUP_TRIPS = 40         # trips kept per scout (plus the cover trips)
+GROUP_RADIUS_M = 2000.0  # unserved contacts this close to a chosen scout's tour join the pool
+GROUP_POOL = 40          # at most this many pool contacts
+GROUP_MOVE_S = 0.8       # realisation time cap per move
+GROUP_NODES = 200000     # search nodes cap in best_disjoint
+
+
+def best_disjoint(lists, floor=-math.inf, nodes=GROUP_NODES):
+    """Best combination of one trip per list with pairwise disjoint contact masks.
+
+    lists: per scout [(value, mask)] sorted by value, best first (include (0, 0) to allow
+    an empty trip). Depth-first over scouts in order of their best trip, pruned when the
+    partial value plus every remaining scout's best trip cannot beat the best so far
+    (initially `floor`). Returns (value, [index per list]) or None if nothing beats floor.
+    """
+    n = len(lists)
+    if n == 0 or any(not lst for lst in lists):
+        return None
+    order = sorted(range(n), key=lambda i: -lists[i][0][0])
+    rest = [0.0] * (n + 1)
+    for pos in range(n - 1, -1, -1):
+        rest[pos] = rest[pos + 1] + max(0.0, lists[order[pos]][0][0])
+    best = [floor, None]
+    picks = [0] * n
+    count = [0]
+
+    def go(pos, value, mask):
+        if pos == n:
+            if value > best[0] + 1e-9:
+                best[0], best[1] = value, list(picks)
+            return
+        for k, (v, m) in enumerate(lists[order[pos]]):
+            count[0] += 1
+            if value + v + rest[pos + 1] <= best[0] + 1e-9 or count[0] > nodes:
+                return
+            if m & mask == 0:
+                picks[order[pos]] = k
+                go(pos + 1, value + v, mask | m)
+
+    go(0, 0.0, 0)
+    return None if best[1] is None else (best[0], best[1])
+
+
 def insertion_positions(home, tasks, pos, limit):
     """Tour positions ordered by added horizontal distance (cheapest insertion first)."""
     points = [home[:2]] + [t["point"] for t in tasks] + [home[:2]]
@@ -1226,7 +1275,10 @@ class Search:
         self.contacts = scenario.contact_by_id()
         self.lns = {"iterations": 0, "accepted": 0, "improvements": 0, "gain": 0.0,
                     "trip_tried": 0, "trip_accepted": 0, "trip_improvements": 0,
-                    "trip_gain": 0.0, "trip_label_s": 0.0}
+                    "trip_gain": 0.0, "trip_label_s": 0.0,
+                    "group_tried": 0, "group_realised": 0, "group_accepted": 0,
+                    "group_improvements": 0, "group_gain": 0.0, "group_label_s": 0.0,
+                    "group_sizes": {}}
         self._trip_cache = {}
         self.trip_stats = {}
         self.lns_share = lns_share
@@ -1784,14 +1836,19 @@ class Search:
 
     def strip_scout(self, state, sid):
         """State without scout sid's tour and the strikes its observations confirm."""
-        cids = {t["cid"] for t in state.tasks.get(sid, ())}
+        return self.strip_scouts(state, (sid,))
+
+    def strip_scouts(self, state, sids):
+        """State without the tours of scouts `sids` and the strikes their observations
+        confirm. Returns (state or None, removed contact ids)."""
+        cids = {t["cid"] for sid in sids for t in state.tasks.get(sid, ())}
         team = {aid for aid, route in state.parsed.items()
                 if self.aircraft[aid].type != SCOUT
                 and any(w.action == "engage" and w.target in cids for w in route.waypoints)}
-        partial = self.checker.extend(self.checker.without(state, team | {sid}), {})
+        partial = self.checker.extend(self.checker.without(state, team | set(sids)), {})
         if partial is None:
             return None, cids
-        partial.tasks = {**state.tasks, sid: []}
+        partial.tasks = {**state.tasks, **{sid: [] for sid in sids}}
         return partial, cids
 
     def realise_trip(self, state, scout, order, z, stop):
@@ -1954,6 +2011,89 @@ class Search:
         partial, _ = self.realise_trip(partial, scout, trips[pick][1], z, stop)
         return partial, sorted(removed)
 
+    def group_scouts(self, state, n, rng):
+        """n scouts for the group move: one picked like the trip move, then neighbours
+        weighted by how close their tours (or bases) come to the chosen ones."""
+        seed = self.trip_scout(state, rng)
+        if seed is None:
+            return []
+        scouts = [a for a in self.sc.aircraft if a.type == SCOUT]
+
+        def points(a):
+            return [a.home[:2]] + [t["point"] for t in state.tasks.get(a.id, ())]
+        chosen = [seed]
+        near = points(seed)
+        while len(chosen) < n:
+            rest = [a for a in scouts if a not in chosen]
+            if not rest:
+                break
+            weights = []
+            for a in rest:
+                d = min(hdist(p, q) for p in points(a) for q in near)
+                weights.append(1.0 / (1.0 + d / 1000.0) ** 2)
+            pick = rng.choices(rest, weights=weights)[0]
+            chosen.append(pick)
+            near += points(pick)
+        return chosen
+
+    def group_move(self, current, rng):
+        """Jointly re-plan n scouts (n from GROUP_SIZES) from the best combination of their
+        label-search trips over a shared contact pool. Returns (partial state, contact ids
+        removed) or None when the estimate finds nothing better than the current trips."""
+        n = rng.choice(GROUP_SIZES)
+        key = str(n)
+        self.lns["group_sizes"][key] = self.lns["group_sizes"].get(key, 0) + 1
+        scouts = self.group_scouts(current, n, rng)
+        if len(scouts) < 2:
+            return None
+        sids = [a.id for a in scouts]
+        mine = {t["cid"] for sid in sids for t in current.tasks.get(sid, ())}
+        others = {t["cid"] for s, tasks in current.tasks.items() if s not in sids for t in tasks}
+        near = [p for a in scouts for p in [a.home[:2]] + [t["point"] for t in current.tasks.get(a.id, ())]]
+        open_ = []
+        for c in self.sc.contacts:
+            if (c.cls in (HOSTILE, UNKNOWN) and c.window is not None and c.id not in current.served
+                    and c.id not in others and c.id not in self.matrix.banned
+                    and self.matrix.priority(c) > 0):
+                d = min(hdist(c.pos, p) for p in near)
+                if d < GROUP_RADIUS_M:
+                    open_.append((d, c.id))
+        pool = set(mine) | {cid for _, cid in sorted(open_)[:max(0, GROUP_POOL - len(mine))]}
+        partial, removed = self.strip_scouts(current, sids)
+        if partial is None:
+            return None
+        exclude = {c.id for c in self.sc.contacts if c.id not in pool} | set(partial.served)
+        start = time.monotonic()
+        bit = {cid: j for j, cid in enumerate(sorted(pool))}
+        lists, layers, cur = [], [], 0.0
+        for a in scouts:
+            route = current.routes.get(a.id)
+            z = max(w["z"] for w in route) if route else SCOUT_LAYERS[0]
+            cands = self.trip_candidates(a, partial.used, exclude, z)
+            order = tuple(t["cid"] for t in current.tasks.get(a.id, ()))
+            trips = trip_labels(self.sc, a, cands, z, top=GROUP_TRIPS, orders=(order,), cover=True)
+            have = [tr[0] for tr in trips if set(tr[1]) == set(order)]
+            cur += max(have) if have and order else 0.0
+            entries = [(tr[0], sum(1 << bit[c] for c in tr[1]), tr) for tr in trips if tr[0] > 0]
+            entries.append((0.0, 0, None))
+            entries.sort(key=lambda e: -e[0])
+            lists.append(entries)
+            layers.append(z)
+        got = best_disjoint([[(v, m) for v, m, _ in lst] for lst in lists], cur)
+        self.lns["group_label_s"] += time.monotonic() - start
+        if got is None:
+            return None
+        picked = [lists[i][k][2] for i, k in enumerate(got[1])]
+        new = {a.id: set(tr[1]) if tr else set() for a, tr in zip(scouts, picked)}
+        if all(new[a.id] == {t["cid"] for t in current.tasks.get(a.id, ())} for a in scouts):
+            return None
+        visits = sorted(((f, a, cid, z) for a, tr, z in zip(scouts, picked, layers) if tr
+                         for cid, f in zip(tr[1], tr[3])), key=lambda v: (v[0], v[2]))
+        stop = min(self.checker.stop, time.monotonic() + GROUP_MOVE_S)
+        partial, _ = self.realise_visits(partial, [(a, cid, z) for _, a, cid, z in visits], stop)
+        self.lns["group_realised"] += 1
+        return partial, sorted(removed)
+
     def improve(self, contacts, priorities, stop=None):
         """Large neighbourhood search: remove a few served contacts, then reinsert.
 
@@ -2010,25 +2150,29 @@ class Search:
         current, best = st["current"], st["best"]
         self.lns["iterations"] += 1
         served = sorted(c for c in current.served if c in by_id)
+        roll = None if self.adaptive else rng.random()
         if self.adaptive:
-            ops = [o for o in self.weights if TRIP_SEARCH or o != "trip"]
+            ops = [o for o in self.weights if (TRIP_SEARCH or o != "trip")
+                   and (GROUP_SIZES or o != "group")]
             op = rng.choices(ops, weights=[self.weights[o] for o in ops])[0]
-        elif TRIP_SEARCH and rng.random() < TRIP_SHARE:
+        elif TRIP_SEARCH and roll < TRIP_SHARE:
             op = "trip"
+        elif GROUP_SIZES and roll < TRIP_SHARE * bool(TRIP_SEARCH) + GROUP_SHARE:
+            op = "group"
         else:
             op = "related" if rng.random() < 0.5 else "random"
         removed, trip_centre = [], []
         partial = current
-        if op == "trip":
-            self.lns["trip_tried"] += 1
-            moved = self.trip_move(current, rng)
+        if op in ("trip", "group"):
+            self.lns[op + "_tried"] += 1
+            moved = self.trip_move(current, rng) if op == "trip" else self.group_move(current, rng)
             if moved is None:
                 op = "related"
             else:
                 partial, stripped = moved
                 trip_centre = [by_id[c].pos for c in stripped if c in by_id]
                 removed = [c for c in stripped if c in by_id and c not in partial.served]
-        if served and op != "trip":
+        if served and op not in ("trip", "group"):
             for cid in self.destroy(op, served, by_id, current, priorities, rng):
                 smaller = self.remove(partial, cid)
                 if smaller is not None:
@@ -2058,10 +2202,10 @@ class Search:
         span = max(1e-6, self.stop - st["begin"])
         heat = st["temperature"] * max(0.0, self.stop - time.monotonic()) / span
         reward = 0.0
-        if delta > 1e-9 or ((removed or op == "trip") and heat > 0 and rng.random() < math.exp(delta / heat)):
+        if delta > 1e-9 or ((removed or op in ("trip", "group")) and heat > 0 and rng.random() < math.exp(delta / heat)):
             self.lns["accepted"] += 1
-            if op == "trip":
-                self.lns["trip_accepted"] += 1
+            if op in ("trip", "group"):
+                self.lns[op + "_accepted"] += 1
             reward = 1.0 if delta > 1e-9 else 0.3
             current = st["current"] = self.record(partial, current, {"kind": "lns", "op": op,
                                                                      "removed": removed},
@@ -2069,9 +2213,9 @@ class Search:
             if current.score > best.score + 1e-9:
                 self.lns["improvements"] += 1
                 self.lns["gain"] += current.score - best.score
-                if op == "trip":
-                    self.lns["trip_improvements"] += 1
-                    self.lns["trip_gain"] += current.score - best.score
+                if op in ("trip", "group"):
+                    self.lns[op + "_improvements"] += 1
+                    self.lns[op + "_gain"] += current.score - best.score
                 st["best"], st["stale"], st["since_best"] = current, 0, 0
                 reward = 3.0
         if self.adaptive:
