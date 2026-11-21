@@ -225,6 +225,23 @@ Scout failures account for 73 contacts and 3,756 points. A direct-flight check (
 
 A generated L2-7 demo is available locally at `output/search/tree.html`, with its winning fleet animation at `output/flight.html`. Generated outputs are ignored by Git; use `--artifacts` to reproduce them.
 
+## Leaderboard submission
+
+`submit_to_board.py` runs the full pipeline in one command: generate the eight public validation scenarios, plan each one, print scores, and submit to the live board.
+
+```sh
+# Full pipeline — generates scenarios, plans, scores, and submits
+python3 submit_to_board.py --token <TOKEN>
+
+# Skip regenerating scenarios and replanning (reuse existing board-plans/)
+python3 submit_to_board.py --token <TOKEN> --skip-generate --skip-plan
+
+# Score locally without submitting
+python3 submit_to_board.py --token <TOKEN> --skip-submit
+```
+
+The `--team` (default `ELARIS`) and `--server` (default `http://192.168.2.19:8080/`) flags can be overridden if needed. Plans are written to `board-plans/` and scenarios to `validation/`. The server keeps your best score per scenario, so resubmitting a worse plan never hurts.
+
 ## Hand-in
 
 Copy `planner.py`, `search_planner.py`, `candidate_matrix.py` and `tree_view.py` together. The official runner supplies `fleetkit` via `PYTHONPATH`. Local runs discover the bundled kit; `FLEETKIT_DIR` can explicitly select another copy. No third-party packages are required, and no changes to the official kit are needed.
