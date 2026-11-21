@@ -24,8 +24,8 @@ Safety comes before cleverness.
 |---|------|-----|-------|--------|
 | 1 | Safety: stop at ~45–50 s (now up to 58 s), build the hand-in folder, run `check_handin.py` on many seeds | Avoid timeouts on a slower grading machine | ? | done: 45 s search, validation stops at 50 s, slowest held-out L4 run 45.9 s |
 | 2 | Takeoff scheduling: own takeoff time, heading and altitude per aircraft | Fix R8 at the base; likely the biggest gain | Daaksh | done: pad-aware takeoffs (`PAD_TAKEOFFS`). Remaining R8 is mostly en route; per-member takeoff slots, layer pairs and wider spacing all lost (README) |
-| 3 | Scouts: plan unknown contacts, insert each new visit at its best position in the tour | 10 of 15 scouts idle in L4 | ? | done: insertion in beam children and LNS, 8-scout fallback. 6 first scouts and extra departure shifts lost (README) |
-| 4 | Polish: swap/drop moves after the search, wait on the ground instead of hovering, fly at best-range speed | Small gains everywhere | ? | open: effectors already back-timed (no hover), scouts stretch legs instead of hovering, cruise at 0.995 v_h |
+| 3 | Scouts: plan unknown contacts, insert each new visit at its best position in the tour | 10 of 15 scouts idle in L4 | ? | done: insertion in beam children and LNS, 8-scout fallback. 6 first scouts and extra departure shifts lost. Scout-tour phase: cheapest-insertion beam expansion and slack-ranked fanout 6/10 won on tuning but lost on held-out seeds 30–45 (−83.69), shared observation points lost; all reverted (README). Only 3 L4 scout-rule failures remain; most misses are `scout_window` and `outranked` |
+| 4 | Polish: swap/drop moves after the search, wait on the ground instead of hovering, fly at best-range speed | Small gains everywhere | ? | open: effectors already back-timed (no hover), scouts stretch legs instead of hovering, cruise at 0.995 v_h. Relocation/2-opt polish of scout orders lost (−48.19 on tuning seeds) and was reverted |
 
 ## How we accept a change
 1. Run the benchmark on the 8 validation scenarios **and** random new seeds.
