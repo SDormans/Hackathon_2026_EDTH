@@ -49,20 +49,14 @@ def main():
                              "(default: on)")
     parser.add_argument("--artifacts", type=Path,
                         help="optional directory for ranked plans, tree.json and interactive tree.html")
-    parser.add_argument("--alns", action="store_true",
-                        help="experimental: beam search, then ALNS on the best plan")
     args = parser.parse_args()
     if not 0 <= args.seconds <= 55 or not 1 <= args.top_n <= 100 or not 1 <= args.beam_width <= 100:
         parser.error("seconds must be 0..55; top-n and beam-width must be 1..100")
     if not 0 <= args.lns_share <= 1:
         parser.error("lns-share must be 0..1")
     scenario = Scenario.from_dict(load_json(args.scenario))
-    if args.alns:
-        from alns import AlnsSearch
-        search = AlnsSearch(scenario, args.seconds, args.top_n, args.beam_width, START)
-    else:
-        search = Search(scenario, args.seconds, args.top_n, args.beam_width, START, args.lns_share,
-                        args.interleave, args.adaptive, args.restarts)
+    search = Search(scenario, args.seconds, args.top_n, args.beam_width, START, args.lns_share,
+                    args.interleave, args.adaptive, args.restarts)
     verified = search.run()
     # Required output is written before optional diagnostics.
     save_json(verified[0][0].plan(scenario.seed), args.plan)
@@ -76,7 +70,7 @@ def main():
         save_tree(report, args.artifacts / "tree.html")
     print(json.dumps({key: report[key] for key in
                       ("elapsed_s", "passes", "lns", "candidate_checks", "rejections",
-                       "unserved", "unserved_points", "solutions", "alns") if key in report}), file=sys.stderr)
+                       "unserved", "unserved_points", "contacts", "solutions") if key in report}), file=sys.stderr)
 
 
 if __name__ == "__main__":

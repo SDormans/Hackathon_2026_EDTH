@@ -1,4 +1,4 @@
-﻿"""Persistent planner benchmarks. Run --help for options; summary exports JSONL."""
+"""Persistent planner benchmarks. Run --help for options; summary exports JSONL."""
 import argparse
 from datetime import datetime, timezone
 import hashlib
@@ -12,7 +12,7 @@ import time
 from uuid import uuid4
 
 ROOT = Path(__file__).resolve().parent
-DEFAULT_HISTORY = ROOT / 'output' / 'test-history'
+DEFAULT_HISTORY = ROOT / 'history'
 
 
 def now():
@@ -73,7 +73,7 @@ def run(args, bench):
     folder = history / run_id
     folder.mkdir(parents=True, exist_ok=False)
     source_paths = list(ROOT.glob('*.py')) + list((ROOT / 'analysis').glob('*.py')) + [planner]
-    record = dict(schema_version=1, run_id=run_id, started_at=now(), status='running',
+    record = dict(schema_version=2, run_id=run_id, started_at=now(), status='running',
                   note=args.note, settings=settings, source_sha256=fingerprints(source_paths),
                   artifacts='benchmark', comparison=None)
     try:
@@ -132,7 +132,7 @@ def run(args, bench):
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('action', nargs='?', choices=['run', 'summary'], default='run')
+    parser.add_argument('action', nargs='?', choices=['run', 'summary', 'contacts'], default='run')
     parser.add_argument('--history', type=Path, default=DEFAULT_HISTORY)
     parser.add_argument('--note', default='', help='Describe the optimisation being tested')
     parser.add_argument('--cases', nargs='+', help='e.g. L1:0 L4:0')
@@ -149,6 +149,10 @@ def main(argv=None):
         return 0
     sys.path.insert(0, str(ROOT / 'analysis'))
     import benchmark_search as bench
+    if args.action == 'contacts':
+        rows = [row for record in records(args.history) for row in record.get('results', [])]
+        print(json.dumps(bench.contact_summary(rows), indent=2, allow_nan=False))
+        return 0
     try:
         return run(args, bench)
     except (OSError, ValueError) as exc:

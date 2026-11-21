@@ -126,6 +126,8 @@ The repair pass and LNS were merged with the upstream opt-in `--alns` phase, the
 
 Every plan was valid and the slowest run took 55.25 seconds. L4-2 scored 665.14 in the first batch and 562.88 after the rebase, so single L4 cases vary by up to about 15% between runs.
 
+A second head-to-head at 45 s with one worker per planner (L1–L4, seeds 15–17, two planners at the same time) gave LNS 5623.67 and `--alns` 5435.37: LNS won all three L4 cases (2883.93 vs 2680.64) and the two tied on L1–L3. The `--alns` option was then removed, so LNS is the only improvement phase.
+
 ### Mixing the search strategies
 
 Three variants were compared with the LNS described above (which then always restarted from the best plan):
@@ -225,7 +227,7 @@ A generated L2-7 demo is available locally at `output/search/tree.html`, with it
 
 ## Hand-in
 
-Copy `planner.py`, `search_planner.py`, `candidate_matrix.py`, `tree_view.py` and `alns.py` (used only with `--alns`) together. The official runner supplies `fleetkit` via `PYTHONPATH`. Local runs discover the bundled kit; `FLEETKIT_DIR` can explicitly select another copy. No third-party packages are required, and no changes to the official kit are needed.
+Copy `planner.py`, `search_planner.py`, `candidate_matrix.py` and `tree_view.py` together. The official runner supplies `fleetkit` via `PYTHONPATH`. Local runs discover the bundled kit; `FLEETKIT_DIR` can explicitly select another copy. No third-party packages are required, and no changes to the official kit are needed.
 
 The original analysis and isolated-mission checker remain in [analysis/](analysis/README.md).
 
@@ -242,7 +244,7 @@ python test_logger.py summary
 ```
 
 With no options it runs L1-L4, seeds 0-2, at 55 seconds per case with one worker.
-Each invocation creates a unique directory in `output/test-history/`; older runs are
+Each invocation creates a unique directory in `history/`; older runs are
 never overwritten. `result.json` includes official points, per-case and aggregate
 planner runtimes, baseline gains, validity/failures, served contacts, search diagnostics,
 settings, UTC timestamps, source SHA-256 hashes, Git state and machine/Python details.
@@ -259,3 +261,28 @@ Runs terminated before final collection retain a `running` record and any benchm
 artifacts already written. Logging applies when launching through this script;
 direct `planner.py` invocations do not enter this history. Use identical settings
 and one worker for useful comparisons; machine load can still affect results.
+
+
+History is intentionally not ignored: commit new run folders with `git add history`
+to share them. The two original runs have been moved from `output/test-history/`
+without changing their contents; embedded command paths describe their original
+execution location. They lack per-contact diagnostics and cannot be backfilled.
+
+New runs preserve `results[].diagnostics.contacts`, keyed by contact ID. Each
+hostile/unknown contact includes `cls`, `points`, `served`, `attempts`, `outcomes`,
+`rules`, and an unserved `reason`. Its enclosing case identifies the level and seed.
+These details are also in benchmark JSON/JSONL results and the planner log.
+
+```sh
+python test_logger.py contacts
+```
+
+This prints per-class counts, reasons, lost points and scout-failure rates across
+saved runs. Each benchmark summary also includes `total.contact_summary` and the
+same breakdown per level. Scout failures mean the primary unserved reason is
+`scout_route` or `scout_rule:*`; the rate denominator is all diagnosed contacts of
+that class, including served contacts. Old runs, failed planners and custom planners
+without diagnostics are counted as cases without detail, never as zero failures.
+Repeated cases across runs count as repeated observations; use `--history` to select
+a separate collection for a controlled comparison. Primary reasons summarise the
+search attempts, not proof that a contact is physically impossible to serve.

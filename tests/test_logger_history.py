@@ -1,4 +1,4 @@
-﻿"""History preservation and comparable-run integration checks."""
+"""History preservation and comparable-run integration checks."""
 import json
 from pathlib import Path
 import subprocess
@@ -28,6 +28,8 @@ class LoggerTests(unittest.TestCase):
             self.assertEqual(len(saved), 2)
             self.assertEqual(saved[1]['comparison']['previous_run_id'], saved[0]['run_id'])
             self.assertEqual(len(saved[1]['results']), 1)
+            self.assertEqual(saved[1]['schema_version'], 2)
+            self.assertIn('contacts', saved[1]['results'][0]['diagnostics'])
             different = run('--seconds', '0.2')
             self.assertEqual(different.returncode, 0, different.stderr)
             latest = json.loads(sorted(history.glob('*/result.json'))[-1].read_text())
@@ -43,6 +45,12 @@ class LoggerTests(unittest.TestCase):
             export = subprocess.run([sys.executable, str(ROOT / 'test_logger.py'), 'summary',
                 '--history', str(history)], capture_output=True, text=True, timeout=10)
             self.assertEqual(len([json.loads(line) for line in export.stdout.splitlines()]), 4)
+            contacts = subprocess.run([sys.executable, str(ROOT / 'test_logger.py'), 'contacts',
+                '--history', str(history)], capture_output=True, text=True, timeout=10)
+            self.assertEqual(contacts.returncode, 0, contacts.stderr)
+            report = json.loads(contacts.stdout)
+            self.assertEqual(report['cases_with_detail'], 3)
+            self.assertEqual(report['cases_without_detail'], 1)
 
 
 if __name__ == '__main__':
