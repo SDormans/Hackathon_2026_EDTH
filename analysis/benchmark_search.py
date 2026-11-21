@@ -336,7 +336,7 @@ Inspect individual plans with the official flight viewer. This report refreshes 
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument('--seconds', type=float, default=55, help='search deadline, 0..55 (default: 55)')
+    parser.add_argument('--seconds', type=float, default=45, help='search deadline, 0..55 (default: 45)')
     parser.add_argument('--cases', nargs='+', help='explicit cases, e.g. L1:0 L2:7')
     parser.add_argument('--levels', help='comma-separated levels (default: L1,L2,L3,L4)')
     parser.add_argument('--seeds', help='inclusive ranges or comma-separated seeds (default: 0-2)')

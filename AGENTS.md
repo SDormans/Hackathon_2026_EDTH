@@ -5,7 +5,7 @@ The team implementation is at this repository's root. The bundled `AA-Hackathon-
 ## Planner constraints
 
 - Python 3.9+ and the standard library only. The official runner supplies `fleetkit` through `PYTHONPATH`; local discovery also supports `FLEETKIT_DIR`.
-- The complete planner process has 60 seconds. The current default search deadline is 55 seconds from startup; preserve time for full official validation and output. See PLAN.md for the proposed larger safety margin.
+- The complete planner process has 60 seconds. The default search deadline is 45 seconds from startup and final validation starts no new call after 50 s, leaving 10 s for validation, output and a slower grading machine.
 - The official score is contact points minus energy and consumed-effector penalties. Higher is better. Invalid plans, crashes and timeouts score zero.
 - The assignment matrix ranks estimated aircraft/contact costs. Timed waypoints represent aircraft motion. Estimated matrix feasibility is not proof that a fleet plan is valid.
 - When replacing routes, check separation for every pair involving a changed route. Recheck confirmation and strike completeness globally; a rebuilt scout tour can break earlier confirmations. Fully validate exported winners with the official scorer.
@@ -39,7 +39,7 @@ python3 analysis/benchmark_search.py --cases L3:7 L4:13 --seconds 55 --workers 2
   --output output/benchmarks/selected-cases
 ```
 
-Defaults are all four levels, seeds 0-2, 55 seconds of search and one worker. For planner changes, compare representative seeds across levels, including L4. Use short runs for smoke checks and full-budget runs for quality conclusions. Parallel jobs share CPU and can change search quality and timing; record the worker count and budget when reporting results.
+Defaults are all four levels, seeds 0-2, 45 seconds of search and one worker. For planner changes, compare representative seeds across levels, including L4. Use short runs for smoke checks and full-budget runs for quality conclusions. Parallel jobs share CPU and can change search quality and timing; record the worker count and budget when reporting results.
 
 The runner prints live progress and total/per-level score summaries, including gains, wins/ties/losses, validity and failures. Open its printed `report.html` path for the browser report, which refreshes while running. Results include JSON, JSONL, CSV, run settings, and per-case scenarios, plans and logs. Aggregate gains use summed raw scores, matching the ranking. Failed planner runs count as zero; generation/setup errors are reported separately and excluded from score comparisons. The runner exits nonzero on execution/validation/setup failures, but a valid score below greedy is a completed comparison.
 

@@ -138,7 +138,7 @@ def main(argv=None):
     parser.add_argument('--cases', nargs='+', help='e.g. L1:0 L4:0')
     parser.add_argument('--levels', help='default: L1,L2,L3,L4')
     parser.add_argument('--seeds', help='default: 0-2')
-    parser.add_argument('--seconds', type=float, default=55)
+    parser.add_argument('--seconds', type=float, default=45)
     parser.add_argument('--timeout', type=float, default=60)
     parser.add_argument('--workers', type=int, default=1)
     parser.add_argument('--planner', type=Path, default=ROOT / 'planner.py')

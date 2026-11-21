@@ -57,7 +57,7 @@ Each node holds routes, scout tasks, consumed effectors and a score. At each con
 - When the beam phase ends, a greedy **repair** pass fills the best plan: unserved unknowns, then hostiles, are inserted at the cheapest scout-tour positions with the free effectors (at most 0.25 s per contact and a quarter of the LNS share). LNS then starts from the best archived plan.
 - Route builders reuse memoised zone detours, and candidates whose waypoints fall outside the horizon or a contact's window are rejected before parsing. Duplicate plans are detected from per-route waypoint tuples.
 - The last `--lns-share` of the budget (default 0.4) runs LNS on the best plan. Each iteration removes 1–4 served contacts, chosen at random or as neighbours of a random contact, rebuilding the affected scout tour from its original departure. It then tries to reinsert the removed contacts, their six nearest unserved neighbours and three random unserved contacts. Each scout visit is tried at the three cheapest tour positions (added distance), and the best valid child per contact is kept. Worse plans are sometimes accepted, with a temperature of 1% of the best score falling to zero. After 25 iterations without a new best, the search restarts from a random plan in the top-N archive (`--no-restarts` returns to the best plan instead) and stops after 400 iterations without a new best. Accepted plans enter the archive, so they receive the same final official validation.
-- Expansion has local time caps, preventing an impossible contact from consuming the whole run. Children must improve the parent's actual score. All archive winners receive a full official validation and score before export; final validation stops starting new calls at 58 seconds. The valid empty plan is the last fallback.
+- Expansion has local time caps, preventing an impossible contact from consuming the whole run. Children must improve the parent's actual score. All archive winners receive a full official validation and score before export; final validation starts no new call 5 s after the search deadline (50 s at the default 45 s budget, at most 58 s). The valid empty plan is the last fallback.
 
 The result is the best N plans **found**, not a proof of the global top N. Contact ordering, a bounded beam, fixed flight settings, shortlists and the improving-child restriction can all discard useful alternatives. The trace records accepted nodes and skip branches; failed route attempts are aggregated by rule, rather than stored individually. Trace growth is capped between passes to keep tiny scenarios from producing unlimited diagnostics.
 
@@ -73,7 +73,7 @@ Tests compare incremental validation with the full official validator on perturb
 
 ### Batch benchmarks
 
-The runner defaults to **12 scenarios** (L1–L4, seeds 0–2), a **55-second search budget** and one worker. Choose a seed range or explicit cases, and optionally run scenarios concurrently:
+The runner defaults to **12 scenarios** (L1–L4, seeds 0–2), a **45-second search budget** (the hand-in default) and one worker. Choose a seed range or explicit cases, and optionally run scenarios concurrently:
 
 ```sh
 # 20 scenarios with four workers and the normal search budget
@@ -261,7 +261,7 @@ python test_logger.py --cases L1:0 L2:7 L3:1 L4:0 --seconds 5 --note "After opti
 python test_logger.py summary
 ```
 
-With no options it runs L1-L4, seeds 0-2, at 55 seconds per case with one worker.
+With no options it runs L1-L4, seeds 0-2, at 45 seconds per case with one worker.
 Each invocation creates a unique directory in `history/`; older runs are
 never overwritten. `result.json` includes official points, per-case and aggregate
 planner runtimes, baseline gains, validity/failures, served contacts, search diagnostics,
