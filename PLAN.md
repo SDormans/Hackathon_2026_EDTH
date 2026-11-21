@@ -24,7 +24,7 @@ Safety comes before cleverness.
 |---|------|-----|-------|--------|
 | 1 | Safety: stop at ~45–50 s (now up to 58 s), build the hand-in folder, run `check_handin.py` on many seeds | Avoid timeouts on a slower grading machine | ? | todo |
 | 2 | Takeoff scheduling: own takeoff time, heading and altitude per aircraft | Fix R8 at the base; likely the biggest gain | Daaksh | todo |
-| 3 | Scouts: plan unknown contacts, insert each new visit at its best position in the tour | 10 of 15 scouts idle in L4 | ? | todo |
+| 3 | Scouts: plan unknown contacts, insert each new visit at its best position in the tour | 10 of 15 scouts idle in L4 | ? | first version on `scouting` |
 | 4 | Polish: swap/drop moves after the search, wait on the ground instead of hovering, fly at best-range speed | Small gains everywhere | ? | if time |
 
 ## How we accept a change

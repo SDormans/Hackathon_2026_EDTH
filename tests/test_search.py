@@ -203,6 +203,59 @@ class SearchTests(unittest.TestCase):
         self.assertTrue(result.valid)
         self.assertAlmostEqual(result.score, repaired.score)
 
+    def test_search_inserts_before_an_existing_task(self):
+        scout = dict(id='scout0', type='scout', subtype=None, home=[0, 0, 0], v_h_mps=30,
+                     v_up_mps=10, v_down_mps=15, capacity_wh=200, battery_pct=100,
+                     power=dict(p0_w=80, k_v=.1, e_climb_wh_per_m=.01))
+        contacts = [dict(id=cid, **{'class': 'unknown'}, pos=pos, points=30, window_s=window)
+                    for cid, pos, window in [('LATE', [1500, 0, 0], [500, 800]),
+                                             ('EARLY', [600, 300, 0], [50, 250])]]
+        sc = Scenario.from_dict(dict(seed=1, level='test', horizon_s=900, aircraft=[scout],
+                                     contacts=contacts, zones=[]))
+        search = Search(sc, seconds=5)
+        search.matrix = CandidateMatrix(sc)
+        late, early = sorted(sc.contacts, key=lambda c: c.id != 'LATE')
+        p = search_planner._Planner(sc)
+        p.tasks = search.root.tasks
+        tasks, route = search.observation(p, sc.aircraft[0], late, 70.0, 0.0, 0.0, 0)
+        state = search.checker.extend(search.root, {'scout0': route})
+        state.tasks = {'scout0': tasks}
+        p.tasks = state.tasks
+        self.assertEqual([k for k, _ in search.feasible_positions(sc.aircraft[0], tasks, early)], [0])
+        children = list(search.children(state, early, time.monotonic() + 5))
+        self.assertTrue(children)
+        for child, _ in children:
+            self.assertEqual(child.served, {'EARLY', 'LATE'})
+            self.assertEqual([t['cid'] for t in child.tasks['scout0']], ['EARLY', 'LATE'])
+            self.assertTrue(evaluate(sc, child.plan(sc.seed)).valid)
+
+    def test_time_window_bound_never_rejects_a_buildable_position(self):
+        sc = Scenario.from_dict(generate('L4', 0))
+        search = Search(sc, seconds=4)
+        search.warm_start()
+        state = search.archive[0]
+        p = search_planner._Planner(sc)
+        p.tasks = state.tasks
+        scouts = [a for a in sc.aircraft if a.type == 'scout' and state.tasks[a.id]]
+        targets = [c for c in sc.contacts if c.cls in ('hostile', 'unknown')
+                   and c.window is not None and c.id not in state.served][:8]
+        rejected = accepted = 0
+        for contact in targets:
+            for scout in scouts:
+                ok = {k for k, _ in search.feasible_positions(scout, state.tasks[scout.id], contact)}
+                accepted += len(ok)
+                for k in set(range(len(state.tasks[scout.id]) + 1)) - ok:
+                    rejected += 1
+                    for z in search_planner.SCOUT_LAYERS:
+                        for angle in (0.0, 60.0, -60.0):
+                            for shift in (0.0, 7.0):
+                                built = search.observation(p, scout, contact, z, angle, shift, k)
+                                if built is not None:
+                                    self.assertEqual(search.checker.quick_reject(
+                                        {scout.id: built[1]}), 'R1')
+        self.assertGreater(rejected, 0)
+        self.assertGreater(accepted, 0)
+
     def test_expired_budget_returns_valid_empty_plan(self):
         sc = scenario()
         search = Search(sc, seconds=0)

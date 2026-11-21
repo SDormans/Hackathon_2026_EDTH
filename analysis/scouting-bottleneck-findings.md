@@ -1,6 +1,6 @@
 # Scouting bottleneck: findings
 
-Scope: why L4 plans leave targets unserved, which code causes it, and what to change first. Documentation only; no planner code was changed for this report.
+Scope: why L4 plans leave targets unserved, which code causes it, and what to change first. Sections 1–4 describe the code before the change; section 5 reports the first implemented step.
 
 Source data: the committed L4 diagnosis run in [results/l4-unserved-diagnosis/](results/l4-unserved-diagnosis/report.html) (seeds 0–2, 55 s search, one worker), summarised in [README.md](../README.md#why-contacts-go-unserved).
 
@@ -55,7 +55,7 @@ The cut-off is a literal in `slots`, not a parameter, and has no fallback. If al
 
 ## 3. Ranked improvements
 
-Points at stake are the L4 unserved points in the targeted reasons. They are upper bounds, not expected gains; no change below has been benchmarked yet.
+Points at stake are the L4 unserved points in the targeted reasons. They are upper bounds, not expected gains. Ranks 1, 2 and 5 are implemented (section 5); the rest are not benchmarked yet.
 
 | Rank | Change | Where | Targets | Points at stake | Effort / risk |
 |---|---|---|---|---|---|
@@ -84,3 +84,40 @@ python3 analysis/scout_reach.py analysis/results/l4-unserved-diagnosis
 ```
 
 Compare the `unserved` and `unserved_points` totals in the new run's `summary.json` with the table in section 1. Single L4 cases vary by a few percent between runs, so judge each change over several seed batches, compare against master under the same load, and report losses as well as wins.
+
+## 5. Results: insertion slots with a timing bound
+
+Implemented in `search_planner.py`:
+
+- `Search.feasible_positions`: lower bound on scout timing per tour position (straight legs at the lowest layer, departure at 0, observation point within `OBS_OFFSET_M` of the contact; earliest observation ends forward, latest observation starts backward from the horizon). A position it rejects cannot pass `_scout_route` and R1; `test_time_window_bound_never_rejects_a_buildable_position` checks this on a generated L4 scenario.
+- `Search.insertion_costs`: every bound-feasible position of **every** scout (no `scouts[:4]` cut), ranked by added distance. The main beam now tries the 6 cheapest (`children(..., slots=6)`), repair the 8 cheapest. Slots the bound rejects are never built; a contact with none is recorded as `scout_route` without any rebuild.
+- `Search.regret` (regret-2 over scouts) orders repair within each class: contacts with one feasible scout first, contacts with none last.
+
+Benchmark: L4 seeds 0–9, 55 s, one worker per batch; four batches (master and branch, seeds 0–4 and 5–9) ran concurrently, so both sides shared the same load.
+
+| Case | Greedy | Master | Branch | Branch − master |
+|---|---|---|---|---|
+| L4:0 | 590.34 | 861.03 | 1119.93 | +258.90 |
+| L4:1 | 432.46 | 618.51 | 956.93 | +338.42 |
+| L4:2 | 331.46 | 518.50 | 716.11 | +197.61 |
+| L4:3 | 532.90 | 796.39 | 1039.06 | +242.67 |
+| L4:4 | 453.48 | 703.98 | 864.50 | +160.52 |
+| L4:5 | 702.45 | 936.64 | 1149.01 | +212.37 |
+| L4:6 | 314.70 | 605.64 | 785.42 | +179.78 |
+| L4:7 | 389.54 | 659.83 | 913.51 | +253.68 |
+| L4:8 | 533.71 | 898.51 | 1092.03 | +193.52 |
+| L4:9 | 440.94 | 726.59 | 825.85 | +99.26 |
+| **Total** | 4721.96 | 7325.62 | 9462.34 | **+2136.72 (+29.2%)** |
+
+All 20 plans were valid; branch beat master on 10 of 10 cases.
+
+Unserved points over the 10 cases:
+
+| Reason | Master | Branch |
+|---|---|---|
+| Scout (`scout_route` + `scout_rule:*`) | 11,291 | 7,605 |
+| `outranked` | 6,442 | 4,956 |
+| `time_cap` | 57 | 533 |
+| `collateral_ban` | 7,827 | 7,827 |
+
+Limits: one run per case, so single-case differences include run-to-run noise of a few percent. Master stopped searching early on 5 cases (31–47 s); the branch used the full 55 s on every case. Regret ordering was not benchmarked separately from the insertion slots. Other levels (L1–L3) were not benchmarked for this change. `time_cap` grew because each expansion now builds more viable routes in the same time allowance.

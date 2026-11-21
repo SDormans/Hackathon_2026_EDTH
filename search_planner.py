@@ -12,7 +12,7 @@ import time
 
 from fleetkit import baseline
 from fleetkit.baseline import (_Planner, _effector_route, _scout_route, EFFECTOR_LAYERS,
-                               SCOUT_LAYERS, SPEED_FACTOR)
+                               OBS_OFFSET_M, SCOUT_LAYERS, SPEED_FACTOR)
 from fleetkit.energy import best_range_speed, route_energy_wh
 from fleetkit.geometry import EPS, hdist
 from fleetkit.model import HOSTILE, SCOUT, UNKNOWN, parse_plan
@@ -285,23 +285,54 @@ class Search:
                 state = replace(p.last, tasks=dict(p.tasks))
                 p.state = self.record(state, p.state, {"kind": "greedy", "contact": c.id}, depth)
 
-    def slots(self, p, contact, insert):
-        """(scout, tour position) pairs. Search appends to the 4 nearest tours; repair
-        ranks every insertion position of every scout by added distance."""
-        scouts = p._scout_candidates(contact, limit=len(p.tasks))
-        if not insert:
-            scouts.sort(key=lambda a: hdist(p.tasks[a.id][-1]["point"] if p.tasks[a.id]
-                                           else a.home, contact.pos))
-            return [(a, len(p.tasks[a.id])) for a in scouts[:4]]
+    def insertion_costs(self, p, contact):
+        """(added distance, scout id, tour position, scout) for every position of every
+        scout tour that passes the time-window bound, cheapest first."""
         ranked = []
-        for a in scouts:
-            stops = [a.home] + [t["point"] for t in p.tasks[a.id]] + [a.home]
-            for k in range(len(stops) - 1):
-                added = (hdist(stops[k], contact.pos) + hdist(contact.pos, stops[k+1])
-                         - hdist(stops[k], stops[k+1]))
+        for a in p._scout_candidates(contact, limit=len(p.tasks)):
+            for k, added in self.feasible_positions(a, p.tasks[a.id], contact):
                 ranked.append((added, a.id, k, a))
         ranked.sort(key=lambda r: r[:3])
-        return [(a, k) for _, _, k, a in ranked[:8]]
+        return ranked
+
+    def feasible_positions(self, scout, tasks, contact):
+        """Tour positions where the contact could still fit, by a lower bound on timing:
+        straight legs at the lowest layer, departing at 0, the observation point within
+        OBS_OFFSET_M of the contact. A rejected position cannot pass _scout_route and R1."""
+        dwell, horizon = self.sc.rules.obs_dwell_s, self.sc.horizon_s
+        speed = min(SPEED_FACTOR * scout.v_h_mps, best_range_speed(scout.power))
+        z = min(SCOUT_LAYERS)
+        climb = z / (SPEED_FACTOR * scout.v_up_mps) + 0.5
+        descent = z / (SPEED_FACTOR * scout.v_down_mps) + 0.5
+        home, pos = scout.home, contact.pos
+        points = [t["point"] for t in tasks]
+        # ends[i]: earliest end of observation i; latest[i]: latest start of observation i.
+        ends, t, cur = [], climb, home
+        for task, point in zip(tasks, points):
+            t = max(t + hdist(cur, point) / speed, task["window"][0]) + dwell
+            ends.append(t)
+            cur = point
+        latest, nxt = [0.0] * len(tasks), horizon - descent
+        for i in range(len(tasks) - 1, -1, -1):
+            after = points[i+1] if i + 1 < len(tasks) else home
+            latest[i] = nxt = min(tasks[i]["window"][1], nxt - hdist(points[i], after) / speed) - dwell
+        lo, hi = contact.window
+        out = []
+        for k in range(len(tasks) + 1):
+            before = points[k-1] if k else home
+            after = points[k] if k < len(tasks) else home
+            start = max((ends[k-1] if k else climb)
+                        + max(0.0, hdist(before, pos) - OBS_OFFSET_M) / speed, lo)
+            if start + dwell > hi + EPS:
+                continue
+            arrive = start + dwell + max(0.0, hdist(pos, after) - OBS_OFFSET_M) / speed
+            if k < len(tasks):
+                if max(arrive, tasks[k]["window"][0]) > latest[k] + EPS:
+                    continue
+            elif arrive + descent > horizon + EPS:
+                continue
+            out.append((k, hdist(before, pos) + hdist(pos, after) - hdist(before, after)))
+        return out
 
     def observation(self, p, scout, contact, z, angle, shift, k):
         """baseline._Planner._add_observation, inserting the task at tour position k."""
@@ -312,7 +343,7 @@ class Search:
         route = _scout_route(scout, tasks, max(0.0, tasks[0]["window"][0] - travel) + shift, z, self.sc)
         return (tasks, route) if route is not None else None
 
-    def children(self, parent, contact, stop, limit=2, insert=False):
+    def children(self, parent, contact, stop, limit=2, slots=6):
         """Bounded candidate generation, recording how far each attempt got."""
         if contact.id in parent.served:
             return
@@ -321,7 +352,7 @@ class Search:
         progress = {"stage": -1, "outcome": "no_options"}
         outcome = None
         try:
-            yield from self._children(parent, contact, stop, limit, stats, progress, insert)
+            yield from self._children(parent, contact, stop, limit, stats, progress, slots)
             outcome = progress["outcome"]
         except DeadlineReached:
             outcome = "accepted" if progress["outcome"] == "accepted" else "time_cap"
@@ -339,7 +370,7 @@ class Search:
         if stage >= progress["stage"]:
             progress["stage"], progress["outcome"] = stage, outcome
 
-    def _children(self, parent, contact, stop, limit, stats, progress, insert):
+    def _children(self, parent, contact, stop, limit, stats, progress, slots):
         """Bounded candidate generation: alternate scouts, teams and flight settings."""
         groups = self.matrix.groups(contact, parent.used) if contact.cls == HOSTILE else [()]
         if not groups:
@@ -349,8 +380,12 @@ class Search:
         p.tasks = parent.tasks
         count = 0
         seen = set()
+        positions = [(a, k) for _, _, k, a in self.insertion_costs(p, contact)[:slots]]
+        if not positions:
+            self._progress(stats, progress, "scout_route")
+            return
         # Round-robin teams before spending time on fine timing adjustments.
-        for (scout, k), z, obs_angle, shift in itertools.product(self.slots(p, contact, insert),
+        for (scout, k), z, obs_angle, shift in itertools.product(positions,
                                                                 SCOUT_LAYERS, (0.0, 60.0, -60.0),
                                                                 (0.0, 7.0)):
             self.checker.check_time(stop)
@@ -424,20 +459,24 @@ class Search:
 
     def repair(self, state, depth):
         """Greedy fill of what the search left unserved: unknowns join any scout tour at
-        their cheapest positions, then hostiles retry with the free effectors."""
+        their cheapest positions, then hostiles retry with the free effectors. Within each
+        class, contacts with the fewest scout alternatives (highest regret) go first."""
         improved = True
         while improved:
             improved = False
             contacts = [c for c in self.sc.contacts if c.cls in (HOSTILE, UNKNOWN)
                         and c.window is not None and c.id not in self.matrix.banned
                         and c.id not in state.served]
-            contacts.sort(key=lambda c: (c.cls != UNKNOWN, -self.matrix.priority(c), c.id))
+            p = _Planner(self.sc)
+            p.tasks = state.tasks
+            regret = {c.id: self.regret(p, c) for c in contacts}
+            contacts.sort(key=lambda c: (c.cls != UNKNOWN, -regret[c.id], -self.matrix.priority(c), c.id))
             for contact in contacts:
                 self.checker.check_time()
                 local_stop = min(self.stop, time.monotonic() + 0.25)
                 best = None
                 try:
-                    for child, decision in self.children(state, contact, local_stop, 4, True):
+                    for child, decision in self.children(state, contact, local_stop, 4, 8):
                         if best is None or child.score > best[0].score:
                             best = (child, decision)
                 except DeadlineReached:
@@ -448,6 +487,17 @@ class Search:
                     self.repaired.add(state.signature())
                     improved = True
         return state
+
+    def regret(self, p, contact):
+        """Regret-2: extra distance if the cheapest scout is unavailable; infinite with
+        one feasible scout, -1 with none (tried last)."""
+        best = {}
+        for added, aid, _, _ in self.insertion_costs(p, contact):
+            best.setdefault(aid, added)
+        costs = sorted(best.values())
+        if not costs:
+            return -1.0
+        return costs[1] - costs[0] if len(costs) > 1 else float("inf")
 
     def search(self, contacts, priorities, rng):
         """Beam passes over varied contact orders until the checker deadline.
