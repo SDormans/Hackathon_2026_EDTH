@@ -37,8 +37,12 @@ DESTROY_OPERATORS = ("random", "related", "worst", "tour", "trip", "group")
 
 
 # Scout candidate generation.
-SCOUT_FANOUT = 4        # scouts tried first for a contact
-SCOUT_FALLBACK = 8      # scouts tried when none of the first SCOUT_FANOUT gives a valid child
+SCOUT_FANOUT = 6        # scouts tried first for a contact
+SCOUT_FALLBACK = 10     # scouts tried when none of the first SCOUT_FANOUT gives a valid child
+# Scout ranking penalises tours whose straight-leg estimate leaves less than this much
+# window slack (seconds) at their tightest visit: real legs detour around zones, so tight
+# tours mostly fail to build (scout_route). The missing slack counts as distance flown.
+SLACK_TIGHT_S = 30.0
 FULL_INSERT_TASKS = 4   # tours up to this long try every insertion position, not only 3
 REORDER_TASKS = 6       # tours up to this long also try deadline- and start-ordered tours
 # Beam expansion tries the append position plus this many cheapest insertion positions
@@ -540,6 +544,12 @@ def tour_fits(scenario, scout, current, contact, order, z, deadlines):
     """False only when the tour visiting `order` (contact ids) at layer z must fail:
     a window or a strike's confirmation deadline (R4) missed, landing after the horizon
     (R1), or the battery exceeded (R3, 1% margin for the estimate)."""
+    return tour_slack(scenario, scout, current, contact, order, z, deadlines) is not None
+
+
+def tour_slack(scenario, scout, current, contact, order, z, deadlines):
+    """Smallest window slack (s, latest allowed finish minus estimated finish) over the
+    visits of the tour, or None when tour_fits is False."""
     by_id = {t["cid"]: t for t in current}
     legs = []
     for cid in order:
@@ -550,8 +560,10 @@ def tour_fits(scenario, scout, current, contact, order, z, deadlines):
             lo, hi = t["window"]
             legs.append((t["point"], (lo, min(hi, deadlines.get(cid, math.inf))), 0.0))
     est = tour_estimate(scenario, scout, legs, z)
-    return (est is not None and est[1] <= scenario.horizon_s + EPS
-            and est[2] <= 1.01 * scout.usable_wh)
+    if (est is None or est[1] > scenario.horizon_s + EPS
+            or est[2] > 1.01 * scout.usable_wh):
+        return None
+    return min(leg[1][1] - finish for leg, finish in zip(legs, est[0]))
 
 
 def strike_deadlines(scenario, aircraft, routes):
@@ -1399,7 +1411,7 @@ class Search:
 
     def _time_ranked(self, parent, contact, insert, scouts):
         """Scouts with a visit order that fits (tour_fits at the lowest layer), cheapest
-        added distance first; one idle scout that fits among the first SCOUT_FANOUT."""
+        added distance (plus the SLACK_TIGHT_S penalty) first; one idle scout that fits among the first SCOUT_FANOUT."""
         deadlines = strike_deadlines(self.sc, self.aircraft, parent.routes)
         z = min(SCOUT_LAYERS)
         ranked = []
@@ -1408,12 +1420,15 @@ class Search:
             cids = tuple(t["cid"] for t in current)
             points = [scout.home[:2]] + [t["point"] for t in current] + [scout.home[:2]]
             best = None
+            speed = eco_speed(scout) if SCOUT_SPEED_MODE == "eco" else fast_speed(scout)
             for i in (range(len(current) + 1) if insert else [len(current)]):
                 order = cids[:i] + (contact.id,) + cids[i:]
-                if not tour_fits(self.sc, scout, current, contact, order, z, deadlines):
+                slack = tour_slack(self.sc, scout, current, contact, order, z, deadlines)
+                if slack is None:
                     continue
                 added = (hdist(points[i], contact.pos) + hdist(contact.pos, points[i + 1])
                          - hdist(points[i], points[i + 1]))
+                added += speed * max(0.0, SLACK_TIGHT_S - slack)
                 best = added if best is None else min(best, added)
             if best is not None:
                 if SCOUT_ENERGY_RANK:
