@@ -355,13 +355,17 @@ class LnsTests(unittest.TestCase):
         u1, u2 = sc.contact_by_id()['U1'], sc.contact_by_id()['U2']
         first, _ = next(search.children(search.root, u1, search.stop))
         self.assertEqual(first.served, {'U1'})
-        self.assertEqual(list(search.children(first, u2, search.stop)), [])
-        child, _ = next(search.children(first, u2, search.stop, insert=True))
-        self.assertEqual(child.served, {'U1', 'U2'})
-        self.assertEqual([t['cid'] for t in child.tasks['scout0']], ['U2', 'U1'])
-        result = evaluate(sc, child.plan(sc.seed))
-        self.assertTrue(result.valid)
-        self.assertAlmostEqual(result.score, child.score, places=6)
+        # Appending U2 after U1 never builds a route...
+        self.assertTrue(all(route is None for _, _, route in
+                            search.scout_options(first, u2, insert=False)))
+        # ...so append mode falls back to insertion, as insert mode does directly.
+        for insert in (False, True):
+            child, _ = next(search.children(first, u2, search.stop, insert=insert))
+            self.assertEqual(child.served, {'U1', 'U2'})
+            self.assertEqual([t['cid'] for t in child.tasks['scout0']], ['U2', 'U1'])
+            result = evaluate(sc, child.plan(sc.seed))
+            self.assertTrue(result.valid)
+            self.assertAlmostEqual(result.score, child.score, places=6)
 
     def test_append_tour_matches_baseline(self):
         sc = Scenario.from_dict(generate('L2', 3))
