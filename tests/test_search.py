@@ -289,6 +289,33 @@ def diagnostic_scenario():
     return Scenario.from_dict(data)
 
 
+class FragilityTests(unittest.TestCase):
+    def test_parts_and_later_strikes(self):
+        sc = Scenario.from_dict(generate('L2', 1))
+        plan = greedy_plan(sc)
+        parts = search_planner.fragility_parts(plan, sc)
+        self.assertGreater(parts['engages'], 0)
+        self.assertEqual(parts, search_planner.fragility_parts(copy.deepcopy(plan), sc))
+        gap = min(parts['mean_gap_s'], search_planner.FRAGILITY_GAP_CAP_S) / search_planner.FRAGILITY_GAP_CAP_S
+        self.assertAlmostEqual(search_planner.plan_fragility(plan, sc),
+                               parts['tight'] + parts['near_pairs'] - gap)
+        later = copy.deepcopy(plan)
+        effectors = {a.id for a in sc.aircraft if a.type == 'effector'}
+        for route in later['routes']:
+            if route['aircraft'] in effectors:
+                for wp in route['waypoints']:
+                    wp['t'] += 60.0
+        shifted = search_planner.fragility_parts(later, sc)
+        self.assertEqual(shifted['tight'], 0)
+        self.assertAlmostEqual(shifted['mean_gap_s'], parts['mean_gap_s'] + 60.0)
+
+    def test_empty_plan(self):
+        sc = Scenario.from_dict(generate('L1', 0))
+        self.assertEqual(search_planner.fragility_parts({'seed': sc.seed, 'routes': []}, sc),
+                         {'tight': 0, 'near_pairs': 0, 'engages': 0, 'mean_gap_s': None})
+        self.assertEqual(search_planner.plan_fragility({'seed': sc.seed, 'routes': []}, sc), -1.0)
+
+
 class DiagnosticsTests(unittest.TestCase):
     def stats(self, outcomes, attempts=None, warm=0):
         return {'attempts': sum(outcomes.values()) if attempts is None else attempts,
