@@ -26,6 +26,7 @@ Safety comes before cleverness.
 | 2 | Takeoff scheduling: own takeoff time, heading and altitude per aircraft | Fix R8 at the base; likely the biggest gain | Daaksh | done: pad-aware takeoffs (`PAD_TAKEOFFS`). Remaining R8 is mostly en route; per-member takeoff slots, layer pairs and wider spacing all lost (README) |
 | 3 | Scouts: plan unknown contacts, insert each new visit at its best position in the tour | 10 of 15 scouts idle in L4 | ? | done: insertion in beam children and LNS, 8-scout fallback. 6 first scouts and extra departure shifts lost (README) |
 | 4 | Polish: swap/drop moves after the search, wait on the ground instead of hovering, fly at best-range speed | Small gains everywhere | ? | open: effectors already back-timed (no hover), scouts stretch legs instead of hovering, cruise at 0.995 v_h |
+| 5 | Link-loss-aware plans: prefer plans with fewer tight confirm couplings and near pairs | Plans that survive a link cut | Stijn | rejected: fragility metric added (`plan_fragility`), no correlation with retention on 127 plans (README); no tie-breaker |
 
 ## How we accept a change
 1. Run the benchmark on the 8 validation scenarios **and** random new seeds.
