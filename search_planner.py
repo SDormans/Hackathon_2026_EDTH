@@ -21,6 +21,12 @@ from fleetkit.scorer import evaluate
 from fleetkit import validator as rules
 from candidate_matrix import CandidateMatrix
 
+# The kit's scout layers (70, 110 m) plus a low one. At 30 m the 3D observation range allows
+# observing from ~139 m instead of ~123 m, and the climb is shorter, so early windows are
+# reached sooner. Official check_handin, L1-L4 seeds 35-39: 9913.7 -> 10089.6 (+1.8%),
+# L4 +3.0%; with seeds 30-34 and the two validation L4s, L4 won 10 of 12 cases.
+SCOUT_LAYERS = tuple(SCOUT_LAYERS) + (30.0,)
+
 
 class DeadlineReached(Exception):
     pass
