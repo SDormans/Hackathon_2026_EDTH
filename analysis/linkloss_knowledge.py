@@ -17,6 +17,12 @@ affected drone learned each event against when it needed to know.
     python3 analysis/linkloss_knowledge.py --history --note "v2 news sharing" \
         --levels L1,L2,L3,L4 --seeds 0-4 --settings 1000x200,250x50 --workers 6      # kept in history/linkloss/
     python3 analysis/linkloss_knowledge.py compare                                    # every stored collection
+    python3 analysis/linkloss_knowledge.py diff BEFORE_DIR AFTER_DIR                  # run by run: fixed, broken
+
+Each separation failure gets a cause (base_traffic, shared_target_edge, lost_message,
+silent_deviation, wrong_prediction, boxed_in, same_time_move, unexplained), with evidence, and
+the report counts them. For policies with `_room`, steps near other drones also record the
+predicted room of each move (`room`), which is what the boxed_in check reads.
 
 A collection (one invocation) is one directory, so teammates' collections never conflict in Git:
 
@@ -64,6 +70,9 @@ HISTORY = ROOT / "history" / "linkloss"   # Git-tracked knowledge store
 SCHEMA = 1
 MU = 0.002                                # message cost in S_loss, as fleetkit.linkloss.score
 NEAR_M = 200.0
+ROOM_RATES = (1.0, 0.5, 0.0, -1.0)        # moves whose predicted room is recorded near other drones
+ROOM_NEAR_M = 150.0
+BELIEF_TOL_M = 15.0                       # belief error that counts as "wrong" in the cause analysis
 
 
 # --------------------------------------------------------------------------- knowledge extraction
@@ -142,6 +151,13 @@ class Recorder:
 
     def __init__(self):
         self.facts, self.steps, self.beliefs = [], [], []
+        self.last_pos = {}                     # drone -> (t, pos) of its latest step
+
+    def close_to(self, t, aid, pos, radius=ROOM_NEAR_M):
+        """True if another drone was within radius at its latest recorded step (at most 1 s old)."""
+        self.last_pos[aid] = (t, pos)
+        return any(o != aid and t - ot <= 1.0 and _dist(op, pos) <= radius
+                   for o, (ot, op) in self.last_pos.items())
 
 
 class Recorded:
@@ -189,6 +205,12 @@ class Recorded:
             step["sent"] = message
         if obs["inbox"]:
             step["heard"] = [{"from": m["from"], "sent_t": m["sent_t"], "payload": m["payload"]} for m in obs["inbox"]]
+        room = getattr(self.inner, "_room", None)
+        if callable(room) and self.rec.close_to(t, self.aid, obs["pos"]):
+            try:   # read-only: _room predicts, it changes no state
+                step["room"] = {f"{r:g}": round(room(t, obs["tau"], r), 1) for r in ROOM_RATES}
+            except Exception:
+                pass
         self.rec.steps.append(step)
         peer_pos = getattr(self.inner, "_peer_pos", None)
         peers = getattr(self.inner, "peers", None)
@@ -317,6 +339,118 @@ def failure_context(rec, failed, window=15):
     return out
 
 
+CAUSES = {
+    "base_traffic": "near the base: one drone taking off or landing next to another",
+    "shared_target_edge": "two effectors of the same target at the edge of the exemption radius",
+    "lost_message": "a drone sent its change, the other never heard it, and its belief was wrong",
+    "silent_deviation": "a drone left its schedule without announcing it, and the other's belief was wrong",
+    "wrong_prediction": "the other's messages arrived, but its belief was still wrong",
+    "boxed_in": "beliefs were right, but no move kept the required room",
+    "same_time_move": "beliefs were right; both drones changed their move in the same second",
+    "unexplained": "beliefs were right and a safe move existed",
+}
+
+
+def classify_failures(rec, contexts, scenario, plan, sep_m):
+    """Adds a `cause` (a key of CAUSES) and `evidence` to each separation failure context.
+
+    Checked in order: where it happened (base, shared target), then whether either drone's
+    belief of the other was wrong in the last seconds and why, then whether any move was safe.
+    """
+    routes, _ = parse_plan(plan)
+    home = {aid: r.waypoints[0].pos for aid, r in routes.items()}
+    target = {aid: (r.waypoints[-1].target if r.waypoints[-1].action == "engage" else None) for aid, r in routes.items()}
+    contacts = scenario.contact_by_id()
+    exempt = scenario.rules.exempt_radius_m
+    steps_at = {(st["t"], st["drone"]): st for st in rec.steps}
+    sent_by = {}
+    for st in rec.steps:
+        if "sent" in st:
+            sent_by.setdefault(st["drone"], []).append(st["t"])
+    for ctx in contexts:
+        if "pair" not in ctx:
+            ctx["cause"] = "not_separation"
+            continue
+        a, b, tf = ctx["pair"][0], ctx["pair"][1], ctx["t"]
+        tl = ctx["timeline"]
+        last = tl[-1] if tl else {}
+        pa = (last.get(a) or {}).get("other_really_at") or None
+        pb = (last.get(b) or {}).get("other_really_at") or None
+        # where: the base (either home), or both near a shared target
+        if pa and pb and min(_hdist(pb, home[a]), _hdist(pb, home[b]), _hdist(pa, home[a]), _hdist(pa, home[b])) < 150:
+            ctx["cause"], ctx["evidence"] = "base_traffic", f"within 150 m of a home at t = {tf:.0f} s"
+            continue
+        ta, tb = target.get(a), target.get(b)
+        if ta and ta == tb and ta in contacts and pa and pb:
+            c = contacts[ta].pos
+            da, db = _dist(pb, c), _dist(pa, c)
+            if min(da, db) <= exempt + 30 and max(da, db) >= exempt - 30:
+                ctx["cause"] = "shared_target_edge"
+                ctx["evidence"] = f"{ta}: {a} at {db:.0f} m, {b} at {da:.0f} m, exemption {exempt:g} m"
+                continue
+        # beliefs in the last 6 s before the failure
+        wrong = []
+        for row in tl:
+            if row["t"] < tf - 6:
+                continue
+            for me, other in ((a, b), (b, a)):
+                e = (row.get(me) or {}).get("belief_error")
+                if e is not None and e > BELIEF_TOL_M:
+                    wrong.append((row["t"], me, other, e))
+        if wrong:
+            t_w, me, other, err = max(wrong, key=lambda w: w[3])
+            sent = [t for t in sent_by.get(other, []) if tf - 20 <= t <= t_w]
+            heard = {h["sent_t"] for t in range(int(tf) - 20, int(t_w) + 2)
+                     for h in (steps_at.get((float(t), me)) or {}).get("heard", []) if h["from"] == other}
+            missed = [t for t in sent if t not in heard]
+            if missed:
+                ctx["cause"] = "lost_message"
+                ctx["evidence"] = f"{me} never heard {other}'s message of t = {missed[-1]:.0f} s; belief off by {err:.0f} m"
+            elif not sent:
+                ctx["cause"] = "silent_deviation"
+                ctx["evidence"] = f"{other} sent nothing in the 20 s before; {me}'s belief off by {err:.0f} m"
+            else:
+                ctx["cause"] = "wrong_prediction"
+                ctx["evidence"] = f"{me} heard {other} but its belief was off by {err:.0f} m at t = {t_w:.0f} s"
+            continue
+        # beliefs right: was any move safe at the last decisions?
+        boxed = []
+        for t in (tf - 2, tf - 1, float(int(tf))):
+            for me in (a, b):
+                room = (steps_at.get((float(int(t)), me)) or {}).get("room")
+                if room and max(room.values()) < sep_m:
+                    boxed.append((int(t), me, max(room.values())))
+        if boxed:
+            t_b, me, best = boxed[-1]
+            ctx["cause"], ctx["evidence"] = "boxed_in", f"{me} at t = {t_b} s: best move kept {best:.0f} m (needs {sep_m:.0f})"
+            continue
+        changes = []
+        for me in (a, b):
+            prev = None
+            for t in range(int(tf) - 6, int(tf) + 1):
+                k = ((steps_at.get((float(t), me)) or {}).get("action") or {}).get("kind")
+                if prev is not None and k != prev:
+                    changes.append((t, me))
+                prev = k
+        same = sorted({t for t, me in changes if me == a} & {t for t, me in changes if me == b})
+        if same:
+            ctx["cause"], ctx["evidence"] = "same_time_move", f"both changed their move at t = {same[-1]} s"
+        else:
+            ctx["cause"], ctx["evidence"] = "unexplained", "beliefs within tolerance and a safe move existed"
+    return contexts
+
+
+def cause_counts(summaries):
+    counts = {}
+    for s in summaries:
+        for ctx in s.get("failure_context") or []:
+            key = ctx.get("cause") or "not_separation"
+            if key == "not_separation":
+                key = (ctx.get("reason") or "?").split(" ")[0]
+            counts[key] = counts.get(key, 0) + 1
+    return dict(sorted(counts.items(), key=lambda kv: -kv[1]))
+
+
 # --------------------------------------------------------------------------- running
 
 def parse_seeds(text):
@@ -396,6 +530,8 @@ def run_one(task):
     near = near_rows(rec, near_m)
     table = event_table(sc, plan, events, rec.facts)
     context = failure_context(rec, result.failed)
+    probe = inner_factory(sc, plan, next(iter(sorted(parse_plan(plan)[0]))))
+    classify_failures(rec, context, sc, plan, getattr(probe, "sep", sc.rules.d_sep_m))
     errors = [r["belief_error"] for r in near if r["belief_error"] is not None]
     name = run_path.name.split(".")[0]
     summary = {
@@ -479,6 +615,38 @@ def compare(root=HISTORY):
     return "\n".join(lines)
 
 
+def _runs(collection_dir):
+    path = Path(collection_dir) / "runs.jsonl"
+    if not path.exists():
+        raise SystemExit(f"{collection_dir}: no runs.jsonl (is it a finished collection?)")
+    return {r["run"]: r for r in map(json.loads, path.read_text().splitlines()) if r}
+
+
+def diff(before_dir, after_dir):
+    """Run by run, what changed from one collection to another (same cases and settings)."""
+    a, b = _runs(before_dir), _runs(after_dir)
+    common = sorted(set(a) & set(b))
+    if not common:
+        raise SystemExit("the two collections share no runs (same cases, settings and comm seeds?)")
+    fixed = [r for r in common if a[r]["failed"] and not b[r]["failed"]]
+    broken = [r for r in common if not a[r]["failed"] and b[r]["failed"]]
+    better = [r for r in common if r not in fixed and b[r]["retention"] > a[r]["retention"] + 1e-6]
+    worse = [r for r in common if r not in broken and b[r]["retention"] < a[r]["retention"] - 1e-6]
+    mean = lambda d, k: statistics.mean(d[r][k] for r in common)
+    lines = [f"{len(common)} common runs ({len(set(a) ^ set(b))} only in one collection)",
+             f"S_loss {mean(a, 's_loss'):.3f} -> {mean(b, 's_loss'):.3f}   retention {mean(a, 'retention'):.3f} -> "
+             f"{mean(b, 'retention'):.3f}   failed {sum(bool(a[r]['failed']) for r in common)} -> "
+             f"{sum(bool(b[r]['failed']) for r in common)}   msgs/ac/min {mean(a, 'messages_per_aircraft_per_min'):.2f} -> "
+             f"{mean(b, 'messages_per_aircraft_per_min'):.2f}", ""]
+    for title, rows in (("fixed (failed before, not now)", fixed), ("newly broken", broken),
+                        ("better retention", better), ("worse retention", worse)):
+        lines.append(f"{title}: {len(rows)}")
+        for r in rows:
+            why = (b[r]["failed"] or a[r]["failed"] or [""])[0][:90]
+            lines.append(f"  {r}: {a[r]['retention']:.3f} -> {b[r]['retention']:.3f}  {why}")
+    return "\n".join(lines)
+
+
 def report(summaries):
     lines = []
     n = len(summaries)
@@ -492,6 +660,16 @@ def report(summaries):
         err = "" if s["max_belief_error_near_m"] is None else f"{s['max_belief_error_near_m']:.0f}"
         lines.append(f"| {s['run']} | {s['retention']:.3f} | {s['messages_per_aircraft_per_min']:.1f} | {err} | "
                      f"{(s['failed'][0] if s['failed'] else '')[:110]} |")
+    causes = cause_counts(summaries)
+    if causes:
+        lines.append("")
+        lines.append("Failure causes (separation failures are classified; others by rule):")
+        for key, n_c in causes.items():
+            lines.append(f"  {n_c:3d}  {key:<20} {CAUSES.get(key, '')}")
+        for s in summaries:
+            for ctx in s.get("failure_context") or []:
+                if ctx.get("evidence"):
+                    lines.append(f"       {s['run']}: {ctx['cause']}: {ctx['evidence']}")
     affected = [r for s in summaries for r in s["event_learning"] if r.get("affected")]
     lines.append("")
     lines.append("Event learning, affected drones only (needed = planned time it had to know by):")
@@ -510,6 +688,11 @@ def report(summaries):
 
 def main(argv=None):
     argv = sys.argv[1:] if argv is None else list(argv)
+    if argv[:1] == ["diff"]:
+        if len(argv) != 3:
+            raise SystemExit("usage: linkloss_knowledge.py diff BEFORE_COLLECTION AFTER_COLLECTION")
+        print(diff(argv[1], argv[2]))
+        return 0
     if argv[:1] == ["compare"]:
         root = Path(argv[1]) if len(argv) > 1 else HISTORY
         print(compare(root))
