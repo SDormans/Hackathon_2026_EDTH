@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field, replace
 import itertools
+import math
 import random
 import time
 
@@ -194,6 +195,19 @@ class IncrementalValidator:
         energies = dict(parent.energies)
         energies.update({aid: route_energy_wh(route.waypoints, self.aircraft[aid])
                          for aid, route in changed.items()})
+        keys = {**parent.keys, **{aid: route_key(route) for aid, route in extra.items()}}
+        return self.state({**parent.routes, **extra}, parent.tasks, parsed,
+                          {**old_items, **new_items}, energies, keys)
+
+    def without(self, parent, aids, tasks):
+        """Parent minus whole routes. Callers drop every engagement of a contact together
+        and only scouts with no remaining observations, so no rule can newly fail."""
+        def keep(d):
+            return {k: v for k, v in d.items() if k not in aids}
+        return self.state(keep(parent.routes), tasks, keep(parent.parsed), keep(parent.separation),
+                          keep(parent.energies), keep(parent.keys))
+
+    def state(self, routes, tasks, parsed, separation, energies, keys):
         served = set()
         used = set()
         for aid, route in parsed.items():
@@ -208,9 +222,8 @@ class IncrementalValidator:
         score = (sum(self.contacts[cid].points for cid in served)
                  - self.sc.rules.lambda_e * sum(energies.values())
                  - self.sc.rules.c_eff * len(used))
-        keys = {**parent.keys, **{aid: route_key(route) for aid, route in extra.items()}}
-        return State({**parent.routes, **extra}, parent.tasks, frozenset(used), parsed,
-                     {**old_items, **new_items}, energies, frozenset(served), score, keys=keys)
+        return State(routes, tasks, frozenset(used), parsed, separation, energies,
+                     frozenset(served), score, keys=keys)
 
 
 class WarmPlanner(_Planner):
@@ -231,9 +244,18 @@ class WarmPlanner(_Planner):
 
 
 class Search:
-    def __init__(self, scenario, seconds=55.0, top_n=5, beam_width=6, start=None):
+    def __init__(self, scenario, seconds=55.0, top_n=5, beam_width=6, start=None, lns_share=0.5,
+                 scout_cost="time"):
         if seconds < 0 or not 1 <= top_n <= 100 or not 1 <= beam_width <= 100:
             raise ValueError("seconds must be nonnegative; top_n and beam_width must be 1..100")
+        if not 0 <= lns_share <= 0.9:
+            raise ValueError("lns_share must be 0..0.9")
+        if scout_cost not in ("time", "distance"):
+            raise ValueError("scout_cost must be time or distance")
+        self.lns_share = lns_share
+        # Primary key for ranking scout insertion positions; the other breaks ties.
+        self.scout_cost = scout_cost
+        self.lns_stats = {"iterations": 0, "accepted": 0, "improved": 0}
         self.sc = scenario
         self.start = time.monotonic() if start is None else start
         # Includes input reading when the CLI passes its process start time.
@@ -286,19 +308,24 @@ class Search:
                 p.state = self.record(state, p.state, {"kind": "greedy", "contact": c.id}, depth)
 
     def insertion_costs(self, p, contact):
-        """(added distance, scout id, tour position, scout) for every position of every
-        scout tour that passes the time-window bound, cheapest first."""
+        """(added flight time, added distance, scout id, tour position, scout) for every
+        position of every scout tour that passes the time-window bound, cheapest first."""
         ranked = []
         for a in p._scout_candidates(contact, limit=len(p.tasks)):
-            for k, added in self.feasible_positions(a, p.tasks[a.id], contact):
-                ranked.append((added, a.id, k, a))
-        ranked.sort(key=lambda r: r[:3])
+            for k, seconds, metres in self.feasible_positions(a, p.tasks[a.id], contact):
+                ranked.append((seconds, metres, a.id, k, a))
+        if self.scout_cost == "distance":
+            ranked.sort(key=lambda r: (r[1], r[0], r[2], r[3]))
+        else:
+            ranked.sort(key=lambda r: r[:4])
         return ranked
 
     def feasible_positions(self, scout, tasks, contact):
         """Tour positions where the contact could still fit, by a lower bound on timing:
         straight legs at the lowest layer, departing at 0, the observation point within
-        OBS_OFFSET_M of the contact. A rejected position cannot pass _scout_route and R1."""
+        OBS_OFFSET_M of the contact. A rejected position cannot pass _scout_route and R1.
+        Returns (position, added flight time, added distance); time includes hovering while
+        waiting for windows, which costs energy like flying."""
         dwell, horizon = self.sc.rules.obs_dwell_s, self.sc.horizon_s
         speed = min(SPEED_FACTOR * scout.v_h_mps, best_range_speed(scout.power))
         z = min(SCOUT_LAYERS)
@@ -317,6 +344,8 @@ class Search:
             after = points[i+1] if i + 1 < len(tasks) else home
             latest[i] = nxt = min(tasks[i]["window"][1], nxt - hdist(points[i], after) / speed) - dwell
         lo, hi = contact.window
+        stops = [(t["point"], t["window"]) for t in tasks]
+        before_s = self.tour_seconds(speed, climb, descent, home, stops)
         out = []
         for k in range(len(tasks) + 1):
             before = points[k-1] if k else home
@@ -331,17 +360,36 @@ class Search:
                     continue
             elif arrive + descent > horizon + EPS:
                 continue
-            out.append((k, hdist(before, pos) + hdist(pos, after) - hdist(before, after)))
+            seconds = self.tour_seconds(speed, climb, descent, home,
+                                        stops[:k] + [(pos, contact.window)] + stops[k:]) - before_s
+            out.append((k, seconds, hdist(before, pos) + hdist(pos, after) - hdist(before, after)))
         return out
+
+    def tour_seconds(self, speed, climb, descent, home, stops):
+        """Estimated airborne time of a tour on straight legs: takeoff is delayed so the
+        first window is not waited for on the ground."""
+        if not stops:
+            return 0.0
+        dwell = self.sc.rules.obs_dwell_s
+        travel = climb + hdist(home, stops[0][0]) / speed
+        t = max(travel, stops[0][1][0])
+        depart = t - travel
+        t += dwell
+        for (a, _), (b, window) in zip(stops, stops[1:]):
+            t = max(t + hdist(a, b) / speed, window[0]) + dwell
+        return t + hdist(stops[-1][0], home) / speed + descent - depart
 
     def observation(self, p, scout, contact, z, angle, shift, k):
         """baseline._Planner._add_observation, inserting the task at tour position k."""
         task = {"cid": contact.id, "point": p._obs_point(scout, contact, angle), "window": contact.window}
         tasks = p.tasks[scout.id][:k] + [task] + p.tasks[scout.id][k:]
+        route = self.scout_tour(scout, tasks, z, shift)
+        return (tasks, route) if route is not None else None
+
+    def scout_tour(self, scout, tasks, z, shift=0.0):
         speed = min(SPEED_FACTOR * scout.v_h_mps, best_range_speed(scout.power))
         travel = hdist(scout.home, tasks[0]["point"]) / speed + z / scout.v_up_mps + 3.0
-        route = _scout_route(scout, tasks, max(0.0, tasks[0]["window"][0] - travel) + shift, z, self.sc)
-        return (tasks, route) if route is not None else None
+        return _scout_route(scout, tasks, max(0.0, tasks[0]["window"][0] - travel) + shift, z, self.sc)
 
     def children(self, parent, contact, stop, limit=2, slots=6):
         """Bounded candidate generation, recording how far each attempt got."""
@@ -380,7 +428,7 @@ class Search:
         p.tasks = parent.tasks
         count = 0
         seen = set()
-        positions = [(a, k) for _, _, k, a in self.insertion_costs(p, contact)[:slots]]
+        positions = [(a, k) for *_, k, a in self.insertion_costs(p, contact)[:slots]]
         if not positions:
             self._progress(stats, progress, "scout_route")
             return
@@ -489,11 +537,11 @@ class Search:
         return state
 
     def regret(self, p, contact):
-        """Regret-2: extra distance if the cheapest scout is unavailable; infinite with
+        """Regret-2: extra flight time if the cheapest scout is unavailable; infinite with
         one feasible scout, -1 with none (tried last)."""
         best = {}
-        for added, aid, _, _ in self.insertion_costs(p, contact):
-            best.setdefault(aid, added)
+        for seconds, _, aid, _, _ in self.insertion_costs(p, contact):
+            best.setdefault(aid, seconds)
         costs = sorted(best.values())
         if not costs:
             return -1.0
@@ -540,6 +588,134 @@ class Search:
                 return False
         return True
 
+    def remove(self, state, cids):
+        """State without the given served contacts: their strike routes are dropped and
+        their scouts' tours rebuilt, first keeping the old takeoff time and altitude.
+        None if a rebuilt tour fails every variant."""
+        drop = {aid for aid, route in state.routes.items()
+                if any(w.get("action") == "engage" and w.get("target") in cids for w in route)}
+        tasks, rebuild = dict(state.tasks), []
+        for aid, tour in state.tasks.items():
+            kept = [t for t in tour if t["cid"] not in cids]
+            if len(kept) == len(tour):
+                continue
+            tasks[aid] = kept
+            if kept:
+                rebuild.append(aid)
+            else:
+                drop.add(aid)
+        new = self.checker.without(state, drop, tasks)
+        for aid in rebuild:
+            scout, old = self.checker.aircraft[aid], state.routes[aid]
+            variants = [(old[1]["z"], old[0]["t"])] + [
+                (z, None, shift) for z in (old[1]["z"],) + tuple(l for l in SCOUT_LAYERS if l != old[1]["z"])
+                for shift in (0.0, 7.0, 15.0)]
+            for variant in variants:
+                self.checker.check_time()
+                if variant[1] is None:
+                    route = self.scout_tour(scout, tasks[aid], variant[0], variant[2])
+                else:
+                    route = _scout_route(scout, tasks[aid], variant[1], variant[0], self.sc)
+                extended = self.checker.extend(new, {aid: route}) if route is not None else None
+                if extended is not None:
+                    new = extended
+                    break
+            else:
+                return None
+        new.tasks = tasks
+        return new
+
+    def destroy(self, state, rng):
+        """2-5 served contacts chosen at random, by proximity in space and time to a
+        random seed, by lowest net value of hostile strikes, or one scout's whole tour."""
+        served = sorted(state.served)
+        if not served:
+            return set()
+        k = min(len(served), rng.randint(2, 5))
+        contacts = self.checker.contacts
+        op = rng.randrange(4)
+        if op == 1:
+            seed = contacts[rng.choice(served)]
+            served.sort(key=lambda cid: hdist(contacts[cid].pos, seed.pos)
+                        + 20.0 * abs(contacts[cid].window[0] - seed.window[0]))
+            return set(served[:k])
+        if op == 2:
+            strikers = {}
+            for aid, route in state.routes.items():
+                for w in route:
+                    if w.get("action") == "engage":
+                        strikers.setdefault(w["target"], []).append(aid)
+            rules = self.sc.rules
+            value = {cid: (contacts[cid].points - rules.c_eff * len(aids)
+                           - rules.lambda_e * sum(state.energies[a] for a in aids))
+                     * rng.uniform(0.8, 1.2) for cid, aids in strikers.items()}
+            if value:
+                return set(sorted(value, key=value.get)[:k])
+        if op == 3:
+            tours = [tour for tour in state.tasks.values() if len(tour) >= 2]
+            if tours:
+                cids = [t["cid"] for t in rng.choice(tours) if t["cid"] in state.served]
+                if cids:
+                    return set(cids[:6])
+        return set(rng.sample(served, k))
+
+    def reinsert(self, state, removed, contacts, priorities):
+        """Regret-ordered greedy reinsertion of the removed contacts and the six
+        highest-regret other unserved contacts."""
+        p = _Planner(self.sc)
+        p.tasks = state.tasks
+        open_ = [c for c in contacts if c.id not in state.served]
+        regret = {c.id: self.regret(p, c) for c in open_}
+        open_.sort(key=lambda c: (-regret[c.id], -priorities[c.id], c.id))
+        others = [c for c in open_ if c.id not in removed][:6]
+        for contact in [c for c in open_ if c.id in removed or c in others]:
+            self.checker.check_time()
+            best = None
+            try:
+                for child, _ in self.children(state, contact, min(self.stop, time.monotonic() + 0.1), 3):
+                    if best is None or child.score > best.score:
+                        best = child
+            except DeadlineReached:
+                self.checker.check_time()
+            if best is not None:
+                state = best
+        return state
+
+    def lns(self, contacts, priorities, rng):
+        """Large neighbourhood search from the best plan with simulated-annealing
+        acceptance; temperature falls linearly to zero at the deadline."""
+        current = best = self.archive[0]
+        begin = time.monotonic()
+        span = max(1e-9, self.stop - begin)
+        stale = 0
+        while True:
+            self.checker.check_time()
+            removed = self.destroy(current, rng)
+            if not removed:
+                return
+            self.lns_stats["iterations"] += 1
+            partial = self.remove(current, removed)
+            if partial is None:
+                continue
+            candidate = self.reinsert(partial, removed, contacts, priorities)
+            if candidate.signature() == current.signature():
+                stale += 1
+            else:
+                temperature = 0.02 * abs(best.score) * max(0.0, self.stop - time.monotonic()) / span
+                delta = candidate.score - current.score
+                if delta > 0 or (temperature > 0 and rng.random() < math.exp(delta / temperature)):
+                    self.lns_stats["accepted"] += 1
+                    current = self.record(candidate, current, {"kind": "lns", "removed": sorted(removed)},
+                                          len(candidate.served))
+                    stale = 0 if current.score > best.score else stale + 1
+                    if current.score > best.score:
+                        self.lns_stats["improved"] += 1
+                        best = current
+                else:
+                    stale += 1
+            if stale >= 30:
+                current, stale = self.archive[0], 0
+
     def repair_archive(self):
         """Repair archived plans, best first, each at most once."""
         while True:
@@ -560,6 +736,33 @@ class Search:
                     and c.window is not None and c.id not in self.matrix.banned]
         priorities = {c.id: self.matrix.priority(c) for c in contacts}
         rng = random.Random(self.sc.seed)
+        # The beam and repair get the first part of the remaining time, LNS the rest.
+        deadline = self.stop
+        self.stop = self.stop - self.lns_share * max(0.0, self.stop - time.monotonic())
+        try:
+            self.beam_and_repair(contacts, priorities, rng)
+        finally:
+            self.stop = self.checker.stop = deadline
+        if contacts:
+            try:
+                self.lns(contacts, priorities, rng)
+            except DeadlineReached:
+                pass
+        # Official full validation is the authority; archive can include partial
+        # plans because every scout already has its return-and-land leg.
+        verified = []
+        for state in self.archive:
+            if time.monotonic() >= self.start + 58.0:
+                break
+            result = evaluate(self.sc, state.plan(self.sc.seed))
+            if result.valid:
+                verified.append((state, result))
+        if not verified:
+            verified = [(self.root, evaluate(self.sc, self.root.plan(self.sc.seed)))]
+        verified.sort(key=lambda pair: -pair[1].score)
+        return verified
+
+    def beam_and_repair(self, contacts, priorities, rng):
         # Alternate: search until a reserve before the deadline, then repair the best
         # unrepaired plans. The reserve adapts to how long repairs take.
         reserve = min(3.0, 0.1 * max(0.0, self.stop - time.monotonic()))
@@ -584,19 +787,6 @@ class Search:
             if not more:
                 break
             reserve = min(reserve, max(0.5, 1.5 * (time.monotonic() - began)))
-        # Official full validation is the authority; archive can include partial
-        # plans because every scout already has its return-and-land leg.
-        verified = []
-        for state in self.archive:
-            if time.monotonic() >= self.start + 58.0:
-                break
-            result = evaluate(self.sc, state.plan(self.sc.seed))
-            if result.valid:
-                verified.append((state, result))
-        if not verified:
-            verified = [(self.root, evaluate(self.sc, self.root.plan(self.sc.seed)))]
-        verified.sort(key=lambda pair: -pair[1].score)
-        return verified
 
     def diagnostics(self, served):
         """Per-contact accounting against the winner's served set."""
@@ -628,7 +818,7 @@ class Search:
                 "candidate_checks": self.checker.calls,
                 "candidate_check_seconds": self.checker.seconds,
                 "rejections": self.checker.rejections,
-                "beam_width": self.width, "requested_top_n": self.top_n,
+                "beam_width": self.width, "requested_top_n": self.top_n, "lns": self.lns_stats,
                 "unserved": diagnostics["unserved"],
                 "unserved_points": diagnostics["unserved_points"],
                 "contacts": diagnostics["contacts"],

@@ -221,7 +221,7 @@ class SearchTests(unittest.TestCase):
         state = search.checker.extend(search.root, {'scout0': route})
         state.tasks = {'scout0': tasks}
         p.tasks = state.tasks
-        self.assertEqual([k for k, _ in search.feasible_positions(sc.aircraft[0], tasks, early)], [0])
+        self.assertEqual([k for k, *_ in search.feasible_positions(sc.aircraft[0], tasks, early)], [0])
         children = list(search.children(state, early, time.monotonic() + 5))
         self.assertTrue(children)
         for child, _ in children:
@@ -242,7 +242,7 @@ class SearchTests(unittest.TestCase):
         rejected = accepted = 0
         for contact in targets:
             for scout in scouts:
-                ok = {k for k, _ in search.feasible_positions(scout, state.tasks[scout.id], contact)}
+                ok = {k for k, *_ in search.feasible_positions(scout, state.tasks[scout.id], contact)}
                 accepted += len(ok)
                 for k in set(range(len(state.tasks[scout.id]) + 1)) - ok:
                     rejected += 1
@@ -255,6 +255,47 @@ class SearchTests(unittest.TestCase):
                                         {scout.id: built[1]}), 'R1')
         self.assertGreater(rejected, 0)
         self.assertGreater(accepted, 0)
+
+    def test_scout_cost_selects_insertion_ranking(self):
+        sc = Scenario.from_dict(generate('L4', 0))
+        with self.assertRaises(ValueError):
+            Search(sc, scout_cost='energy')
+        search = Search(sc, seconds=4)
+        search.warm_start()
+        state = search.archive[0]
+        p = search_planner._Planner(sc)
+        p.tasks = state.tasks
+        contact = next(c for c in sc.contacts if c.cls in ('hostile', 'unknown')
+                       and c.window is not None and c.id not in state.served)
+        for cost, key in (('time', 0), ('distance', 1)):
+            search.scout_cost = cost
+            ranked = search.insertion_costs(p, contact)
+            self.assertGreater(len(ranked), 1)
+            self.assertEqual([r[key] for r in ranked], sorted(r[key] for r in ranked))
+
+    def test_remove_drops_served_contacts_and_stays_valid(self):
+        sc = Scenario.from_dict(generate('L3', 1))
+        search = Search(sc, seconds=4)
+        search.warm_start()
+        state = search.archive[0]
+        hostile = next(c.id for c in sc.contacts if c.cls == 'hostile' and c.id in state.served)
+        unknown = next(c.id for c in sc.contacts if c.cls == 'unknown' and c.id in state.served)
+        smaller = search.remove(state, {hostile, unknown})
+        self.assertIsNotNone(smaller)
+        self.assertEqual(smaller.served, state.served - {hostile, unknown})
+        self.assertFalse(any(t['cid'] in (hostile, unknown) for tour in smaller.tasks.values() for t in tour))
+        result = evaluate(sc, smaller.plan(sc.seed))
+        self.assertTrue(result.valid)
+        self.assertAlmostEqual(result.score, smaller.score)
+
+    def test_lns_runs_and_exports_valid_plans(self):
+        sc = Scenario.from_dict(generate('L2', 3))
+        search = Search(sc, seconds=3, lns_share=0.5)
+        verified = search.run()
+        self.assertGreater(search.lns_stats['iterations'], 0)
+        for state, result in verified:
+            self.assertTrue(result.valid)
+            self.assertAlmostEqual(result.score, state.score)
 
     def test_expired_budget_returns_valid_empty_plan(self):
         sc = scenario()

@@ -121,3 +121,47 @@ Unserved points over the 10 cases:
 | `collateral_ban` | 7,827 | 7,827 |
 
 Limits: one run per case, so single-case differences include run-to-run noise of a few percent. Master stopped searching early on 5 cases (31–47 s); the branch used the full 55 s on every case. Regret ordering was not benchmarked separately from the insertion slots. Other levels (L1–L3) were not benchmarked for this change. `time_cap` grew because each expansion now builds more viable routes in the same time allowance.
+
+## 6. Results: time ranking and large-neighbourhood search
+
+Changes in `search_planner.py`:
+
+- `Search.feasible_positions` also returns the added tour time (`Search.tour_seconds`: straight legs at the lowest layer, climb, descent, observation dwell and hovering until each window opens; takeoff is delayed so the first window is not waited for on the ground). `Search.insertion_costs` ranks by time with distance as the tie-break, or the other way round with `scout_cost="distance"` (`--scout-cost`). `Search.regret` uses added time.
+- `Search.lns` runs in the last `lns_share` of the remaining time (`--lns-share`, default 0.5). `Search.destroy` picks 2–5 served contacts (random, related by position and window start, lowest net strike value) or one scout's whole tour. `Search.remove` rebuilds the affected scout tours (old timing first, then other altitudes and departure shifts) and drops the related strikes; `Search.reinsert` reinserts the removed contacts and the six highest-regret other unserved contacts, regret first. Improvements are always accepted; worse plans with probability exp(Δ/T), T = 2% of the best score, falling linearly to zero at the deadline. Every candidate passes the incremental validator and is archived; exported winners are validated by the official scorer as before.
+
+Benchmark: L4 seeds 0–9, 55 s, one worker per batch. Each round ran 8 batches concurrently on 8 cores (variants × seeds 0–4 and 5–9), always including the previous `scouting` version (`4e613b8`, "insertion") under the same load.
+
+| Variant | Rounds | Total per round | vs insertion |
+|---|---|---|---|
+| Insertion (`4e613b8`, distance ranking, no LNS) | 3 | 9,471.00 / 9,488.65 / 9,469.63 | — |
+| Time ranking, no LNS | 1 | 9,184.30 | −3.1% |
+| Time ranking, LNS 0.3 | 2 | 9,735.48 / 9,683.11 | +2.5% |
+| Time ranking, LNS 0.5 | 2 | 9,938.25 / 9,896.50 | +4.7% |
+| Time ranking, LNS 0.7 | 1 | 9,995.42 | +5.5% |
+| Distance ranking, LNS 0.5 | 2 | 10,306.07 / 10,298.32 | +8.7% |
+| Distance ranking, LNS 0.7 | 1 | 10,160.00 | +7.2% |
+
+Mean score per case:
+
+| Case | Insertion | Time, LNS 0.5 | Distance, LNS 0.5 |
+|---|---|---|---|
+| L4:0 | 1126.7 | 1170.6 | 1184.1 |
+| L4:1 | 956.3 | 963.4 | 1015.7 |
+| L4:2 | 716.1 | 727.6 | 799.5 |
+| L4:3 | 1039.1 | 1007.5 | 1109.4 |
+| L4:4 | 864.5 | 944.9 | 980.7 |
+| L4:5 | 1148.9 | 1197.6 | 1173.9 |
+| L4:6 | 785.3 | 807.0 | 882.0 |
+| L4:7 | 913.4 | 1011.8 | 987.2 |
+| L4:8 | 1092.0 | 1205.5 | 1298.4 |
+| L4:9 | 834.1 | 881.4 | 871.2 |
+
+All plans in every round were valid; there were no timeouts. Distance ranking with LNS 0.5 scored higher than insertion on all 10 cases; time ranking with LNS 0.5 on 9 of 10 (lower on L4:3).
+
+Observations and limits:
+
+- LNS is the main gain: +754 points over time ranking without LNS in the same round.
+- Ranking by added time alone lowered the score. A likely cause: hovering is counted as cost, so time ranking prefers positions that avoid waiting even when they lengthen the flight, while the score charges energy, which depends mostly on flight distance. This was not tested further.
+- Runs shared 8 cores with 7 other batches; results under `--workers 1` on an idle machine may differ. The insertion version varied by at most 19 points between rounds; single cases vary more.
+- `lns_share` was tuned on the same seeds it was measured on; it has not been confirmed on unseen seeds or on L1–L3.
+
