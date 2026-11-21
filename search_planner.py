@@ -33,10 +33,7 @@ class DeadlineReached(Exception):
     pass
 
 
-DESTROY_OPERATORS = ("random", "related", "worst", "tour", "trip", "group", "blocker")
-BLOCKER_SHARE = 0.15    # share of LNS steps using "blocker" (without --adaptive)
-BLOCKER_TOP = 5         # the blocker target is drawn from this many best unserved contacts
-BLOCKER_TOURS = 4       # nearest scout tours checked for room for the target
+DESTROY_OPERATORS = ("random", "related", "worst", "tour", "trip", "group")
 
 
 # Scout candidate generation.
@@ -2150,49 +2147,6 @@ class Search:
                 return rng.sample(tour, min(k, len(tour)))
         return rng.sample(served, k)
 
-    def blockers(self, current, by_id, priorities, rng):
-        """(target, served contacts to remove): a high-priority unserved contact and up to
-        three served contacts holding what it needs: strikes flown by effectors of its
-        cheapest teams, and visits on the nearest scout tours it cannot be inserted into."""
-        open_ = [c for c in by_id.values() if c.id not in current.served
-                 and priorities[c.id] > -math.inf]
-        if not open_:
-            return None, []
-        target = rng.choice(sorted(open_, key=lambda c: (-priorities[c.id], c.id))[:BLOCKER_TOP])
-        strike = []
-        if target.cls == HOSTILE:
-            engaged = {aid: w.target for aid, route in current.parsed.items()
-                       for w in route.waypoints if w.action == "engage"}
-            for team in self.matrix.groups(target, set()):
-                for a in team:
-                    cid = engaged.get(a.id)
-                    if cid in current.served and cid in by_id and cid not in strike:
-                        strike.append(cid)
-            strike.sort(key=lambda c: priorities[c] * rng.uniform(0.8, 1.2))
-        deadlines = strike_deadlines(self.sc, self.aircraft, current.routes)
-        z = min(SCOUT_LAYERS)
-        tours = []
-        for sid, tasks in current.tasks.items():
-            cids = [t["cid"] for t in tasks if t["cid"] in current.served and t["cid"] in by_id]
-            if cids:
-                tours.append((min(hdist(t["point"], target.pos) for t in tasks), sid, tasks, cids))
-        tours.sort(key=lambda t: t[:2])
-        blocked = []
-        for reach, sid, tasks, cids in tours[:BLOCKER_TOURS]:
-            order = tuple(t["cid"] for t in tasks)
-            fits = any(tour_fits(self.sc, self.aircraft[sid], tasks, target,
-                                 order[:i] + (target.id,) + order[i:], z, deadlines)
-                       for i in range(len(order) + 1))
-            blocked.append((fits, reach, cids))
-        blocked.sort(key=lambda t: t[:2])
-        visits = []
-        for _, _, cids in blocked[:2]:
-            visits.extend(sorted(cids, key=lambda c: hdist(by_id[c].pos, target.pos))[:2])
-        picks = []
-        for pair in itertools.zip_longest(strike, visits):
-            picks.extend(c for c in pair if c is not None and c not in picks)
-        return target, picks[:rng.randint(1, 3)]
-
     def lns_step(self, st, contacts, priorities):
         rng, by_id = self.lns_rng, st["by_id"]
         current, best = st["current"], st["best"]
@@ -2207,23 +2161,10 @@ class Search:
             op = "trip"
         elif GROUP_SIZES and roll < TRIP_SHARE * bool(TRIP_SEARCH) + GROUP_SHARE:
             op = "group"
-        elif roll < (TRIP_SHARE * bool(TRIP_SEARCH) + GROUP_SHARE * bool(GROUP_SIZES)
-                     + BLOCKER_SHARE):
-            op = "blocker"
         else:
             op = "related" if rng.random() < 0.5 else "random"
         removed, trip_centre = [], []
         partial = current
-        target = None
-        if op == "blocker":
-            target, picks = self.blockers(current, by_id, priorities, rng)
-            for cid in picks:
-                smaller = self.remove(partial, cid)
-                if smaller is not None:
-                    partial = smaller
-                    removed.append(cid)
-            if not removed:
-                op, target = "related", None
         if op in ("trip", "group"):
             self.lns[op + "_tried"] += 1
             moved = self.trip_move(current, rng) if op == "trip" else self.group_move(current, rng)
@@ -2233,7 +2174,7 @@ class Search:
                 partial, stripped = moved
                 trip_centre = [by_id[c].pos for c in stripped if c in by_id]
                 removed = [c for c in stripped if c in by_id and c not in partial.served]
-        if served and op not in ("trip", "group", "blocker"):
+        if served and op not in ("trip", "group"):
             for cid in self.destroy(op, served, by_id, current, priorities, rng):
                 smaller = self.remove(partial, cid)
                 if smaller is not None:
@@ -2247,8 +2188,6 @@ class Search:
         noise = {c.id: rng.uniform(0.6, 1.4) for c in pool}
         order = (sorted(pool, key=lambda c: -priorities[c.id] * noise[c.id])
                  + [by_id[c] for c in removed])
-        if target is not None:
-            order = [target] + [c for c in order if c.id != target.id]
         for contact in order:
             self.checker.check_time()
             local_stop = min(self.checker.stop, time.monotonic() + 0.08)
