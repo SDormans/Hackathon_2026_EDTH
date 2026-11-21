@@ -15,8 +15,8 @@ from fleetkit import baseline
 from fleetkit.baseline import (_Planner, _effector_route, _scout_route, EFFECTOR_LAYERS,
                                SCOUT_LAYERS, SPEED_FACTOR)
 from fleetkit.energy import best_range_speed, route_energy_wh
-from fleetkit.geometry import EPS, hdist, segment_enters_cylinder
-from fleetkit.model import HOSTILE, SCOUT, UNKNOWN, parse_plan
+from fleetkit.geometry import EPS, dist3, hdist, segment_enters_cylinder
+from fleetkit.model import EFFECTOR, HOSTILE, SCOUT, UNKNOWN, parse_plan
 from fleetkit.scorer import evaluate
 from fleetkit import validator as rules
 from candidate_matrix import CandidateMatrix
@@ -50,8 +50,9 @@ _tours = {}
 # metre is flat near the best-range speed (on L4, 0.98 v_h costs +0-1.5% per metre) while
 # airtime, hence hover-free p0 energy, R1 (home by the horizon) and window reach, improve
 # by 5-35%. For scouts whose best-range speed exceeds 0.95 v_h the kit speed is both slower
-# and dearer. R2 allows v_h exactly; 0.98 keeps a 2% margin.
-SCOUT_CRUISE = 0.98
+# and dearer. R2 allows v_h exactly; 0.995 keeps a 0.5% margin (waypoint times are
+# rounded to 1 ms, legs last tens of seconds).
+SCOUT_CRUISE = 0.995
 # "fast": every scout leg at SCOUT_CRUISE * v_h. "eco": the kit's speed. "hybrid": the kit's
 # speed, falling back to fast when the eco tour misses a window, the horizon or the battery.
 # Set per run by Search(scout_speed=...); planner.py --scout-speed.
@@ -59,7 +60,7 @@ SCOUT_SPEEDS = ("fast", "eco", "hybrid")
 SCOUT_SPEED_MODE = "fast"
 # Contacts are on the ground; the 3D observation range allows a horizontal offset of
 # sqrt(R_obs^2 - z^2): ~133 m at 70 m, ~102 m at 110 m. The kit always uses 100 m.
-OBS_MARGIN_M = 8.0
+OBS_MARGIN_M = 2.0
 # Set per run by Search(obs_stretch=...); planner.py --obs-stretch / --no-obs-stretch.
 OBS_STRETCH = True
 
@@ -71,6 +72,10 @@ OBS_STRETCH = True
 # vertical climb when the diagonal leg would cross a zone or protected area, or is too
 # short to hide the climb. Off: the kit's vertical climb and descent.
 DIAGONAL_CLIMB = True
+# Effector cruise speed as a share of v_h. The kit flies min(0.95 v_h, best-range speed),
+# but on L3/L4 the best-range speed of nearly every effector is above 0.95 v_h, so
+# flying closer to v_h is both earlier and cheaper per metre. R2 allows v_h exactly.
+EFFECTOR_CRUISE = 0.995
 # Effector cruise layer sets, tried in order for a strike team; member i flies at
 # layers[i % len(layers)]. First the whole team at the 30 m floor: team members arrive a
 # few seconds apart, in trail, and less climb saves energy (e_climb x 10-100 m each). Then
@@ -106,10 +111,44 @@ def climb_path(scenario, path, distance, end=False):
     return path[:-1] + [mid, path[-1]] if end else [path[0], mid] + path[1:]
 
 
+_effector_shapes = {}
+
+
 def effector_route(eff, contact, arrive, z, angle, scenario):
-    """The kit's _effector_route, climbing along the first leg (DIAGONAL_CLIMB)."""
+    """The kit's _effector_route, climbing along the first leg (DIAGONAL_CLIMB).
+
+    The flight path depends only on (effector, contact, layer, angle); it is built once
+    and only the times are placed for each arrival."""
     if not DIAGONAL_CLIMB:
         return _effector_route(eff, contact, arrive, z, angle, scenario)
+    key = (id(scenario), eff.id, contact.id, z, angle, EFFECTOR_CRUISE)
+    shape = _effector_shapes.get(key)
+    if shape is None or shape[0] is not scenario:
+        if len(_effector_shapes) > 200000:
+            _effector_shapes.clear()
+        shape = _effector_shapes[key] = (scenario, _effector_shape(eff, contact, z, angle, scenario))
+    shape = shape[1]
+    if shape is None:
+        return None, arrive
+    if shape == "kit":
+        return _effector_route(eff, contact, arrive, z, angle, scenario)
+    home, inner, a_pt, e_pt, t_cruise, t_final = shape
+    earliest = t_cruise + t_final
+    if arrive < earliest:
+        return None, earliest
+    t_a = arrive - t_final
+    t_o = t_a - t_cruise
+    wps = [baseline._wp(t_o, home)]
+    for frac, point in inner:
+        wps.append(baseline._wp(t_o + t_cruise * frac, point))
+    wps.append(baseline._wp(t_a, a_pt))
+    wps.append(baseline._wp(arrive, e_pt, action="engage", target=contact.id))
+    return wps, earliest
+
+
+def _effector_shape(eff, contact, z, angle, scenario):
+    """(home, [(share of cruise time, point)], approach, engage point, cruise s, final s),
+    None when no path exists, or "kit" for the kit's vertical climb."""
     home = eff.home
     reach = min(baseline.APPROACH_M, 0.5 * hdist(home, contact.pos))
     ux, uy = baseline._toward_home(contact, home, angle)
@@ -117,27 +156,17 @@ def effector_route(eff, contact, arrive, z, angle, scenario):
     e_pt = (contact.pos[0], contact.pos[1], baseline.ENGAGE_Z)
     path = _cached_detour([(home[0], home[1], z), a_pt], scenario)
     if path is None:
-        return None, arrive
-    v_h = SPEED_FACTOR * eff.v_h_mps
+        return None
+    v_h = EFFECTOR_CRUISE * eff.v_h_mps
     t_final = max(hdist(a_pt, e_pt) / v_h,
                   (z - baseline.ENGAGE_Z) / (SPEED_FACTOR * eff.v_down_mps)) + 0.2
     v_cruise = min(v_h, best_range_speed(eff.power))
     total = baseline._length(path)
     path = climb_path(scenario, path, v_cruise * (z / (SPEED_FACTOR * eff.v_up_mps) + 0.5))
     if path is None:
-        return _effector_route(eff, contact, arrive, z, angle, scenario)
-    t_cruise = total / v_cruise
-    earliest = t_cruise + t_final
-    if arrive < earliest:
-        return None, earliest
-    t_a = arrive - t_final
-    t_o = t_a - t_cruise
-    wps = [baseline._wp(t_o, home)]
-    for k in range(1, len(path) - 1):
-        wps.append(baseline._wp(t_o + t_cruise * baseline._length(path[:k + 1]) / total, path[k]))
-    wps.append(baseline._wp(t_a, a_pt))
-    wps.append(baseline._wp(arrive, e_pt, action="engage", target=contact.id))
-    return wps, earliest
+        return "kit"
+    inner = [(baseline._length(path[:k + 1]) / total, path[k]) for k in range(1, len(path) - 1)]
+    return home, inner, a_pt, e_pt, total / v_cruise, t_final
 
 
 def eco_speed(scout):
@@ -350,16 +379,32 @@ def _diagonal(route):
     return len(route) > 1 and (route[1]["x"], route[1]["y"]) != (route[0]["x"], route[0]["y"])
 
 
+_neighbours = {}
+
+
+def pad_neighbours(scenario, aircraft, aid):
+    """{other id: (gap needed vertically, gap needed level)} for pads closer than d_sep."""
+    hit = _neighbours.get(id(scenario))
+    if hit is None or hit[0] is not scenario:
+        table = {}
+        for a in aircraft.values():
+            table[a.id] = {b.id: (takeoff_need(scenario, a, b), takeoff_need(scenario, a, b, True))
+                           for b in aircraft.values()
+                           if b.id != a.id and takeoff_need(scenario, a, b) is not None}
+        hit = _neighbours[id(scenario)] = (scenario, table)
+    return hit[1].get(aid, {})
+
+
 def pad_conflict(scenario, aircraft, routes, extra):
     """True if a new route takes off too close in time to a neighbouring pad's takeoff."""
     for aid, route in extra.items():
-        mine = aircraft[aid]
-        for oid, other in list(extra.items()) + list(routes.items()):
-            if oid == aid or not other or (oid in extra and other is not extra[oid]):
+        level = _diagonal(route)
+        for oid, needs in pad_neighbours(scenario, aircraft, aid).items():
+            other = extra[oid] if oid in extra else routes.get(oid)
+            if not other:
                 continue
-            need = takeoff_need(scenario, mine, aircraft[oid],
-                                _diagonal(route) and _diagonal(other))
-            if need is not None and abs(route[0]["t"] - other[0]["t"]) < need:
+            need = needs[1] if level and _diagonal(other) else needs[0]
+            if abs(route[0]["t"] - other[0]["t"]) < need:
                 return True
     return False
 
@@ -368,12 +413,12 @@ def takeoff_shift(scenario, aircraft, routes, scout, depart, limit=40.0, step=2.
     """Smallest delay so the scout's climb stays clear of takeoffs on neighbouring pads.
     Landings and later legs are left to the validator."""
     others = []
-    for aid, route in routes.items():
-        if aid == scout.id or not route:
+    for aid, needs in pad_neighbours(scenario, aircraft, scout.id).items():
+        route = routes.get(aid)
+        if not route:
             continue
-        need = takeoff_need(scenario, scout, aircraft[aid], DIAGONAL_CLIMB and _diagonal(route))
-        if need is not None:
-            others.append((route[0]["t"], need))
+        need = needs[1] if DIAGONAL_CLIMB and _diagonal(route) else needs[0]
+        others.append((route[0]["t"], need))
     shift = 0.0
     while shift <= limit:
         if all(abs(depart + shift - t0) >= need for t0, need in others):
@@ -532,6 +577,8 @@ class State:
     score: float
     node_id: int = 0
     keys: dict = field(default_factory=dict)
+    # IncrementalValidator.route_info entry of every route (avoids re-hashing keys).
+    infos: dict = field(default_factory=dict)
 
     def plan(self, seed):
         return {"seed": seed, "routes": [
@@ -564,6 +611,112 @@ class IncrementalValidator:
         self.seconds = 0.0
         self.rejections = {}
         self.last_rule = None
+        # Routes are never edited after construction, so everything derived from one
+        # route (parsed form, local rule result, R8 pieces, energy) and every R8 pair
+        # result is a pure function of the routes: sibling branches retry the same scout
+        # route with ~100 strike variants, and passes rebuild the same routes.
+        self._routes = {}   # (aid, route_key) -> (rid, Route, violations, item, energy)
+        self._pairs = {}    # (rid, rid) -> R8 violation or None
+        self.cache_hits = 0
+
+    def route_info(self, aid, waypoints, key=None):
+        k = (aid, route_key(waypoints) if key is None else key)
+        hit = self._routes.get(k)
+        if hit is not None:
+            self.cache_hits += 1
+            return hit
+        if len(self._routes) > 200000:
+            self._routes.clear()
+            self._pairs.clear()
+        plan = {"seed": self.sc.seed, "routes": [{"aircraft": aid, "waypoints": waypoints}]}
+        changed, errors = parse_plan(plan)
+        if errors or changed is None:
+            raise ValueError("route builder produced malformed waypoints: " + str(errors))
+        route, violations = changed[aid], None
+        for check in (rules._r1, rules._r2, rules._r3, rules._r5, rules._r6,
+                      rules._r7, rules._r9):
+            found = check(self.sc, changed, plan) if check is rules._r1 else check(self.sc, changed)
+            if found:
+                violations = found
+                break
+        item = energy = None
+        obs, eng = [], []
+        if violations is None:
+            ac = self.aircraft[aid]
+            item = rules.separation_item(aid, route, ac)
+            energy = route_energy_wh(route.waypoints, ac)
+            if item is not None:
+                # Bounding box of the flight (pieces are straight, so the waypoints bound
+                # it) and its time span: a quick exact pre-filter for R8 pairs.
+                pts = [w.pos for w in route.waypoints]
+                item = item + ((min(p[0] for p in pts), max(p[0] for p in pts),
+                                min(p[1] for p in pts), max(p[1] for p in pts),
+                                min(p[2] for p in pts), max(p[2] for p in pts)),)
+            # What R4, R10 and scoring read from this route.
+            for wp in route.waypoints:
+                c = self.contacts.get(wp.target)
+                if wp.action == "observe" and c is not None and rules.valid_observation(wp, c, self.sc):
+                    obs.append((c.id, wp.t + wp.dwell_s, ac.type == SCOUT, c.cls == UNKNOWN))
+                elif wp.action == "engage":
+                    strike = c is not None and c.cls == HOSTILE and ac.type == EFFECTOR
+                    eng.append((wp.target, wp.t, strike, ac.subtype or "?",
+                                strike and dist3(wp.pos, c.pos) <= self.sc.rules.R_eng_m + EPS))
+        hit = self._routes[k] = (len(self._routes), route, violations, item, energy, obs, eng)
+        return hit
+
+    def global_rules(self, infos):
+        """R4 then R10 over the whole plan from per-route summaries; the same verdicts as
+        rules._r4 and rules._r10. Returns a violation list or None."""
+        margin = self.sc.rules.confirm_margin_s
+        first_obs = {}
+        groups = {}
+        for info in infos:
+            for cid, end, by_scout, _ in info[5]:
+                if by_scout and end < first_obs.get(cid, math.inf):
+                    first_obs[cid] = end
+            for cid, t, strike, sub, close in info[6]:
+                if strike:
+                    groups.setdefault(cid, []).append((t, sub, close))
+        for cid, group in groups.items():
+            for t, _, _ in group:
+                if not first_obs.get(cid, math.inf) <= t - margin + EPS:
+                    return [rules.Violation("R4", "engagement without a confirmed observation",
+                                            contact=cid)]
+        for cid, group in groups.items():
+            counts = {}
+            for _, sub, _ in group:
+                counts[sub] = counts.get(sub, 0) + 1
+            want = {k: v for k, v in self.contacts[cid].needs.items() if v > 0}
+            times = [t for t, _, _ in group]
+            if (counts != want or max(times) - min(times) > self.sc.rules.sync_window_s + EPS
+                    or not all(close for _, _, close in group)):
+                return [rules.Violation("R10", "engagement group", contact=cid)]
+        return None
+
+    def apart(self, a, b):
+        """True when two separation items can never come within d_sep: their time spans
+        do not overlap, or their bounding boxes are at least d_sep apart on one axis."""
+        if min(a[3], b[3]) - max(a[2], b[2]) <= 1e-12:
+            return True
+        d = self.sc.rules.d_sep_m
+        p, q = a[5], b[5]
+        return (p[0] - q[1] >= d or q[0] - p[1] >= d or p[2] - q[3] >= d or q[2] - p[3] >= d
+                or p[4] - q[5] >= d or q[4] - p[5] >= d)
+
+    def pair_violation(self, a, b):
+        """R8 for two (rid, item) routes, memoised by route ids."""
+        key = (a[0], b[0]) if a[0] < b[0] else (b[0], a[0])
+        if key in self._pairs:
+            self.cache_hits += 1
+            return self._pairs[key]
+        if a[1] is None or b[1] is None or self.apart(a[1], b[1]):
+            violation = None
+        else:
+            violation = rules.separation_violation(self.sc.rules, self.contacts, a[1][:5], b[1][:5])
+        if len(self._pairs) > 2000000:
+            self._pairs.clear()
+        self._pairs[key] = violation
+        return violation
 
     def check_time(self, stop=None):
         if time.monotonic() >= min(self.stop, stop if stop is not None else self.stop):
@@ -581,7 +734,8 @@ class IncrementalValidator:
         def keep(d):
             return {k: v for k, v in d.items() if k not in removed}
         return replace(parent, routes=keep(parent.routes), parsed=keep(parent.parsed),
-                       separation=keep(parent.separation), energies=keep(parent.energies))
+                       separation=keep(parent.separation), energies=keep(parent.energies),
+                       infos=keep(parent.infos))
 
     def extend(self, parent, extra):
         self.check_time()
@@ -614,52 +768,74 @@ class IncrementalValidator:
             self.last_rule = rule
             self.rejections[rule] = self.rejections.get(rule, 0) + 1
             return None
-        plan = {"seed": self.sc.seed, "routes": [
-            {"aircraft": aid, "waypoints": route} for aid, route in extra.items()]}
-        changed, errors = parse_plan(plan)
-        if errors or changed is None:
-            raise ValueError("route builder produced malformed waypoints: " + str(errors))
-        for check in (rules._r1, rules._r2, rules._r3, rules._r5, rules._r6,
-                      rules._r7, rules._r9):
-            violations = check(self.sc, changed, plan) if check is rules._r1 else check(self.sc, changed)
-            if violations:
-                return self.reject(violations)
+        keys = {aid: route_key(route) for aid, route in extra.items()}
+        infos = {aid: self.route_info(aid, route, keys[aid]) for aid, route in extra.items()}
+        for info in infos.values():
+            if info[2]:
+                return self.reject(info[2])
+        changed = {aid: info[1] for aid, info in infos.items()}
         parsed = {**parent.parsed, **changed}
-        for check in (rules._r4, rules._r10):
-            violations = check(self.sc, parsed)
+        every = {**parent.infos, **infos}
+        if len(every) != len(set(parent.parsed) | set(infos)):
+            every = None
+        if every is not None:
+            violations = self.global_rules(every.values())
             if violations:
                 return self.reject(violations)
-        new_items = {aid: rules.separation_item(aid, route, self.aircraft[aid])
-                     for aid, route in changed.items()}
-        old_items = {aid: item for aid, item in parent.separation.items() if aid not in changed}
-        pairs = itertools.chain(itertools.combinations(new_items.values(), 2),
-                                itertools.product(new_items.values(), old_items.values()))
-        for a, b in pairs:
+        else:
+            for check in (rules._r4, rules._r10):
+                violations = check(self.sc, parsed)
+                if violations:
+                    return self.reject(violations)
+        new = [(info[0], info[3]) for info in infos.values()]
+        old = []
+        for aid, item in parent.separation.items():
+            if aid in changed:
+                continue
+            info = parent.infos.get(aid)
+            # Parent routes normally come through here; otherwise check without the memo.
+            old.append((info[0], item) if info is not None and info[3] is item else (-1, item))
+        for a, b in itertools.chain(itertools.combinations(new, 2), itertools.product(new, old)):
             self.check_time()
-            if a is not None and b is not None:
-                violation = rules.separation_violation(self.sc.rules, self.contacts, a, b)
-                if violation:
-                    return self.reject([violation])
+            if a[0] < 0 or b[0] < 0:
+                violation = (None if a[1] is None or b[1] is None else
+                             rules.separation_violation(self.sc.rules, self.contacts,
+                                                        a[1][:5], b[1][:5]))
+            else:
+                violation = self.pair_violation(a, b)
+            if violation:
+                return self.reject([violation])
+        new_items = {aid: info[3] for aid, info in infos.items()}
+        old_items = {aid: item for aid, item in parent.separation.items() if aid not in changed}
         energies = dict(parent.energies)
-        energies.update({aid: route_energy_wh(route.waypoints, self.aircraft[aid])
-                         for aid, route in changed.items()})
+        energies.update({aid: info[4] for aid, info in infos.items()})
         served = set()
         used = set()
-        for aid, route in parsed.items():
-            for wp in route.waypoints:
-                if wp.action == "engage":
-                    served.add(wp.target)
+        if every is not None:
+            for aid, info in every.items():
+                for cid, _, _, unknown in info[5]:
+                    if unknown:
+                        served.add(cid)
+                for cid, *_ in info[6]:
+                    served.add(cid)
                     used.add(aid)
-                elif wp.action == "observe":
-                    c = self.contacts[wp.target]
-                    if c.cls == UNKNOWN and rules.valid_observation(wp, c, self.sc):
-                        served.add(c.id)
+        else:
+            for aid, route in parsed.items():
+                for wp in route.waypoints:
+                    if wp.action == "engage":
+                        served.add(wp.target)
+                        used.add(aid)
+                    elif wp.action == "observe":
+                        c = self.contacts[wp.target]
+                        if c.cls == UNKNOWN and rules.valid_observation(wp, c, self.sc):
+                            served.add(c.id)
         score = (sum(self.contacts[cid].points for cid in served)
                  - self.sc.rules.lambda_e * sum(energies.values())
                  - self.sc.rules.c_eff * len(used))
-        keys = {**parent.keys, **{aid: route_key(route) for aid, route in extra.items()}}
+        keys = {**parent.keys, **keys}
         return State({**parent.routes, **extra}, parent.tasks, frozenset(used), parsed,
-                     {**old_items, **new_items}, energies, frozenset(served), score, keys=keys)
+                     {**old_items, **new_items}, energies, frozenset(served), score, keys=keys,
+                     infos={**parent.infos, **infos})
 
 
 class WarmPlanner(_Planner):

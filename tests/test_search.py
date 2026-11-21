@@ -572,5 +572,53 @@ class ClimbTests(unittest.TestCase):
             self.assertTrue(evaluate(sc, state.plan(sc.seed)).valid)
 
 
+
+class CacheTests(unittest.TestCase):
+    def test_memoised_validation_matches_fresh_validation(self):
+        sc = Scenario.from_dict(generate('L3', 2))
+        search = Search(sc, seconds=4.0)
+        best = search.run()[0][0]
+        self.assertGreater(search.checker.cache_hits, 0)
+        # A fresh validator (empty memo) given the whole best plan at once gives the same
+        # state as the memoised search, and the official scorer agrees.
+        fresh = IncrementalValidator(sc, time.monotonic() + 30)
+        state = fresh.extend(search.root, dict(best.routes))
+        self.assertIsNotNone(state)
+        self.assertEqual(fresh.cache_hits, 0)
+        self.assertEqual(state.served, best.served)
+        self.assertAlmostEqual(state.score, best.score, places=6)
+        self.assertAlmostEqual(evaluate(sc, best.plan(sc.seed)).score, best.score, places=6)
+        search.checker.stop = time.monotonic() + 30
+        again = search.checker.extend(search.root, dict(best.routes))
+        self.assertAlmostEqual(again.score, best.score, places=6)
+
+    def test_every_memoised_verdict_matches_the_official_validator(self):
+        """Summaries (R4/R10/scoring), pad neighbours, effector shapes and the R8 box
+        filter: every accepted or rejected extend during a search agrees with validate()."""
+        from fleetkit.validator import validate
+        sc = Scenario.from_dict(generate('L4', 2))
+        search = Search(sc, seconds=5.0)
+        inner = search.checker._extend
+        seen = {'checked': 0, 'rejected': 0}
+
+        def checked(parent, extra):
+            result = inner(parent, extra)
+            plan = {'seed': sc.seed, 'routes': [{'aircraft': a, 'waypoints': w}
+                                                for a, w in {**parent.routes, **extra}.items()]}
+            violations = validate(sc, plan)
+            self.assertEqual(result is None, bool(violations), [v.rule for v in violations])
+            if result is not None:
+                official = evaluate(sc, plan)
+                self.assertAlmostEqual(result.score, official.score, places=6)
+                self.assertEqual(set(result.served), set(official.served))
+            seen['checked'] += 1
+            seen['rejected'] += result is None
+            return result
+
+        search.checker._extend = checked
+        search.run()
+        self.assertGreater(seen['checked'], 100)
+        self.assertGreater(seen['rejected'], 10)
+
 if __name__ == '__main__':
     unittest.main()
