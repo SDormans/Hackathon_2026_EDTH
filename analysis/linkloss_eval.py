@@ -227,6 +227,13 @@ def cmd_run(a):
     if LEADERBOARD in cells and not a.ranges and not a.capacities and a.comm_seeds == SEEDS:
         row = write_variant(a.name, a.policy, seeds, cases, cells, score, frontier, per_case, secs)
         print(json.dumps(row, indent=1))
+    else:
+        CACHE.mkdir(parents=True, exist_ok=True)
+        with open(CACHE / f"{a.name}-cases.csv", "w", newline="") as fh:
+            w = csv.writer(fh)
+            w.writerow(["range_m", "capacity_Bps", "case", "retention", "failures", "msgs_per_ac_min"])
+            for (r, c), label, ret, f, m in per_case:
+                w.writerow([f"{r:g}", f"{c:g}", label, f"{ret:.4f}", f, f"{m:.3f}"])
     for (r, c), x in cells.items():
         print(f"  {r:6g} m {c:5g} B/s  ret {x['retention']:.4f}  fail {x['failures']:3d}/{x['runs']}  "
               f"msgs {x['messages_per_aircraft_per_min']:6.2f}  s_loss {x['s_loss']:.4f}  {'meets' if x['meets'] else ''}"
