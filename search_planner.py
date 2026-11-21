@@ -38,7 +38,7 @@ DESTROY_OPERATORS = ("random", "related", "worst", "tour", "trip", "group")
 
 # Scout candidate generation.
 BEAM_DIVERSE = 3        # beam slots kept for states with an unrepresented used/served set
-BEAM_DIVERSE_EXTRA = True  # diverse slots come on top of the width (else they replace its tail)
+BEAM_DIVERSE_EXTRA = False  # diverse slots come on top of the width (else they replace its tail)
 # Beam states rank by score + BOUND_WEIGHT * optimistic value of the contacts still to come:
 # net points x a feasibility fraction 1 - 0.5**n (n = scouts that could still reach the
 # contact in its window; effectors: spare free aircraft per needed subtype), so contacts
