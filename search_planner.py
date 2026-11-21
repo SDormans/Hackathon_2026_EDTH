@@ -261,7 +261,7 @@ class WarmPlanner(_Planner):
 
 class Search:
     def __init__(self, scenario, seconds=55.0, top_n=5, beam_width=6, start=None, lns_share=0.4,
-                 interleave=False, adaptive=False, restarts=True):
+                 interleave=False, adaptive=False, restarts=True, variant=0):
         if seconds < 0 or not 1 <= top_n <= 100 or not 1 <= beam_width <= 100:
             raise ValueError("seconds must be nonnegative; top_n and beam_width must be 1..100")
         if not 0 <= lns_share <= 1:
@@ -282,7 +282,9 @@ class Search:
         if interleave:
             # Beam passes alternate with LNS bursts; a short final tail is LNS only.
             self.beam_stop = self.stop - min(lns_share, 0.1) * max(0.0, self.stop - self.start)
-        self.lns_rng = random.Random(scenario.seed + 7919)
+        # Parallel workers differ only by variant: random streams and first contact order.
+        self.variant = variant
+        self.lns_rng = random.Random(scenario.seed + 7919 + 104729 * variant)
         self.lns_state = None
         self.weights = {op: 1.0 for op in DESTROY_OPERATORS}
         self.root = State({}, {a.id: [] for a in scenario.aircraft if a.type == SCOUT},
@@ -492,11 +494,11 @@ class Search:
         while contacts:
             self.checker.check_time()
             # Different orders explore different scout tours and allocations.
-            if self.passes % 4 == 0:
+            if (self.passes + self.variant) % 4 == 0:
                 order = sorted(contacts, key=lambda c: (-priorities[c.id], c.id))
-            elif self.passes % 4 == 1:
+            elif (self.passes + self.variant) % 4 == 1:
                 order = sorted(contacts, key=lambda c: (c.window[1], -priorities[c.id], c.id))
-            elif self.passes % 4 == 2:
+            elif (self.passes + self.variant) % 4 == 2:
                 order = sorted(contacts, key=lambda c: (-c.points, c.id))
             else:
                 noise = {c.id: rng.uniform(0.65, 1.35) for c in contacts}
@@ -547,7 +549,7 @@ class Search:
         contacts = [c for c in self.sc.contacts if c.cls in (HOSTILE, UNKNOWN)
                     and c.window is not None and c.id not in self.matrix.banned]
         priorities = {c.id: self.matrix.priority(c) for c in contacts}
-        rng = random.Random(self.sc.seed)
+        rng = random.Random(self.sc.seed + 104729 * self.variant)
         self.checker.stop = min(self.beam_stop, self.stop)
         try:
             self.search(contacts, priorities, rng)

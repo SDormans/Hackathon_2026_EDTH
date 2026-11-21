@@ -27,6 +27,7 @@ except ModuleNotFoundError:
         sys.path.insert(0, str(kits[0].parent.parent))
 
 from fleetkit.model import Scenario, load_json, save_json
+from parallel_search import available_cores, run_parallel
 from search_planner import Search
 
 
@@ -51,22 +52,31 @@ def main():
                         help="optional directory for ranked plans, tree.json and interactive tree.html")
     parser.add_argument("--alns", action="store_true",
                         help="experimental: beam search, then ALNS on the best plan")
+    parser.add_argument("--workers", type=int, default=0,
+                        help="parallel search processes; 0 = available cores, at most 8; 1 = no workers")
     args = parser.parse_args()
     if not 0 <= args.seconds <= 55 or not 1 <= args.top_n <= 100 or not 1 <= args.beam_width <= 100:
         parser.error("seconds must be 0..55; top-n and beam-width must be 1..100")
     if not 0 <= args.lns_share <= 1:
         parser.error("lns-share must be 0..1")
+    if not 0 <= args.workers <= 64:
+        parser.error("workers must be 0..64")
     scenario = Scenario.from_dict(load_json(args.scenario))
+    kwargs = {"seconds": args.seconds, "top_n": args.top_n, "beam_width": args.beam_width,
+              "start": START}
     if args.alns:
-        from alns import AlnsSearch
-        search = AlnsSearch(scenario, args.seconds, args.top_n, args.beam_width, START)
+        from alns import AlnsSearch as factory
     else:
-        search = Search(scenario, args.seconds, args.top_n, args.beam_width, START, args.lns_share,
-                        args.interleave, args.adaptive, args.restarts)
-    verified = search.run()
+        factory = Search
+        kwargs.update(lns_share=args.lns_share, interleave=args.interleave,
+                      adaptive=args.adaptive, restarts=args.restarts)
+    workers = args.workers or min(8, available_cores())
+    search, verified, plan, _, parallel = run_parallel(factory, scenario, kwargs, workers,
+                                                       START + 57.0)
     # Required output is written before optional diagnostics.
-    save_json(verified[0][0].plan(scenario.seed), args.plan)
+    save_json(plan, args.plan)
     report = search.report(verified)
+    report["parallel"] = parallel
     if args.artifacts:
         from tree_view import save_tree
         args.artifacts.mkdir(parents=True, exist_ok=True)
@@ -76,7 +86,7 @@ def main():
         save_tree(report, args.artifacts / "tree.html")
     print(json.dumps({key: report[key] for key in
                       ("elapsed_s", "passes", "lns", "candidate_checks", "rejections",
-                       "unserved", "unserved_points", "solutions", "alns") if key in report}), file=sys.stderr)
+                       "unserved", "unserved_points", "solutions", "alns", "parallel") if key in report}), file=sys.stderr)
 
 
 if __name__ == "__main__":

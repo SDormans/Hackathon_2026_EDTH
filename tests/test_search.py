@@ -16,6 +16,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 # Entry point also supplies the local fleetkit discovery used by these tests.
 import planner
+from parallel_search import run_parallel
 from candidate_matrix import CandidateMatrix
 import search_planner
 from search_planner import (DESTROY_OPERATORS, IncrementalValidator, Search, scout_tour,
@@ -222,7 +223,7 @@ class SearchTests(unittest.TestCase):
         # Copy only hand-in modules, with fleetkit supplied by the runner.
         with tempfile.TemporaryDirectory() as tmp:
             work = Path(tmp)
-            for name in ['planner.py', 'search_planner.py', 'candidate_matrix.py', 'tree_view.py']:
+            for name in ['planner.py', 'search_planner.py', 'candidate_matrix.py', 'tree_view.py', 'parallel_search.py']:
                 shutil.copy2(ROOT / name, work / name)
             sc = generate('L1', 7)
             save_json(sc, work / 'scenario.json')
@@ -455,6 +456,34 @@ class AlnsTests(unittest.TestCase):
         for state, result in verified:
             self.assertTrue(evaluate(sc, state.plan(sc.seed)).valid)
             self.assertAlmostEqual(result.score, state.score, places=6)
+
+
+class ParallelTests(unittest.TestCase):
+    def test_workers_vary_and_best_plan_is_valid(self):
+        sc = Scenario.from_dict(generate('L2', 3))
+        start = time.monotonic()
+        kwargs = {'seconds': 3.0, 'start': start}
+        search, verified, plan, result, stats = run_parallel(Search, sc, kwargs, 3, start + 6.0)
+        self.assertLess(time.monotonic() - start, 6.0)
+        self.assertEqual(stats['workers'], 3)
+        self.assertEqual(stats['received'], 2)
+        self.assertTrue(evaluate(sc, plan).valid)
+        self.assertAlmostEqual(evaluate(sc, plan).score, result.score, places=6)
+        self.assertGreaterEqual(result.score, verified[0][1].score)
+        self.assertAlmostEqual(result.score, max(stats['scores'].values()), places=5)
+
+    def test_single_worker_matches_in_process_search(self):
+        sc = Scenario.from_dict(generate('L1', 2))
+        start = time.monotonic()
+        search, verified, plan, result, stats = run_parallel(Search, sc, {'seconds': 1.0, 'start': start},
+                                                             1, start + 3.0)
+        self.assertEqual((stats['workers'], stats['received'], stats['winner']), (1, 0, 0))
+        self.assertEqual(plan, verified[0][0].plan(sc.seed))
+
+    def test_variants_change_first_order_and_streams(self):
+        sc = Scenario.from_dict(generate('L1', 2))
+        a, b = Search(sc, 1.0), Search(sc, 1.0, variant=1)
+        self.assertNotEqual(a.lns_rng.random(), b.lns_rng.random())
 
 
 if __name__ == '__main__':

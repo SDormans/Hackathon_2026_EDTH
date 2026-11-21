@@ -126,6 +126,22 @@ The repair pass and LNS were merged with the upstream opt-in `--alns` phase, the
 
 Every plan was valid and the slowest run took 55.25 seconds. L4-2 scored 665.14 in the first batch and 562.88 after the rebase, so single L4 cases vary by up to about 15% between runs.
 
+### Parallel search result
+
+`planner.py` runs `--workers` independent searches (default: the available cores, at most 8; `--workers 1` disables it). Worker *k* shifts the first beam contact order by *k* and seeds the beam and LNS random streams differently. Variant 0 runs in the main process, so a worker that fails or misses the 57 s collection deadline only loses its own plans. The official scorer re-validates the best worker plan before it replaces the main result. Process start uses `fork`; without it the planner runs single-process.
+
+L1–L4, seeds 0–2, 55 s, one benchmark worker (each planner had all eight cores), every plan valid:
+
+| Level | Greedy | `--workers 1` | 8 workers | Change |
+|---|---:|---:|---:|---:|
+| L1 | 291.65 | 332.36 | 332.36 | 0.0% |
+| L2 | 731.36 | 844.04 | 856.40 | +1.5% |
+| L3 | 1245.60 | 1564.80 | 1581.42 | +1.1% |
+| L4 | 1354.26 | 2518.36 | 2670.27 | +6.0% |
+| **Total** | 3622.86 | 5259.56 | 5440.45 | +3.4% |
+
+No case scored lower; the longest run took 55.30 s. On L4 the winning plan came from workers 1, 6 and 4, and the eight variants of one case spread from 970 to 1089. The gain depends on the grading machine having free cores; on one core the processes share time and each search gets less of it.
+
 ### Mixing the search strategies
 
 Three variants were compared with the LNS described above (which then always restarted from the best plan):
@@ -225,7 +241,7 @@ A generated L2-7 demo is available locally at `output/search/tree.html`, with it
 
 ## Hand-in
 
-Copy `planner.py`, `search_planner.py`, `candidate_matrix.py`, `tree_view.py` and `alns.py` (used only with `--alns`) together. The official runner supplies `fleetkit` via `PYTHONPATH`. Local runs discover the bundled kit; `FLEETKIT_DIR` can explicitly select another copy. No third-party packages are required, and no changes to the official kit are needed.
+Copy `planner.py`, `search_planner.py`, `candidate_matrix.py`, `tree_view.py`, `parallel_search.py` and `alns.py` (used only with `--alns`) together. The official runner supplies `fleetkit` via `PYTHONPATH`. Local runs discover the bundled kit; `FLEETKIT_DIR` can explicitly select another copy. No third-party packages are required, and no changes to the official kit are needed.
 
 The original analysis and isolated-mission checker remain in [analysis/](analysis/README.md).
 
