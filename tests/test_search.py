@@ -753,6 +753,26 @@ class DiverseBeamTests(unittest.TestCase):
         self.assertEqual(len(search_planner.diverse_beam(ranked[:5], 4, diverse=2, extra=False)), 4)
         self.assertEqual(len(search_planner.diverse_beam(ranked[:2], 4, diverse=2)), 2)
 
+
+class OptimisticBoundTests(unittest.TestCase):
+    def test_bound_drops_with_consumed_resources(self):
+        sc = Scenario.from_dict(generate('L4', 0))
+        search = Search(sc, seconds=0)
+        search.matrix = CandidateMatrix(sc)
+        contacts = [c for c in sc.contacts if c.id not in search.matrix.banned
+                    and c.cls in ('hostile', 'unknown') and c.window is not None]
+        search.setup_bound(contacts)
+        root = search.root
+        full = search.bound(root, contacts)
+        self.assertGreater(full, 0)
+        self.assertLessEqual(full, sum(search.bound_value.values()) + 1e-9)
+        no_effectors = replace(root, used=frozenset(a.id for a in search.matrix.effectors))
+        unknown_only = search.bound(no_effectors, contacts)
+        self.assertLess(unknown_only, full)
+        self.assertGreater(unknown_only, 0)
+        self.assertEqual(search.bound(replace(root, served=frozenset(c.id for c in contacts)),
+                                      contacts), 0)
+
 if __name__ == '__main__':
     unittest.main()
 
