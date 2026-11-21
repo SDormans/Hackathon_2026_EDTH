@@ -711,3 +711,69 @@ class TripTests(unittest.TestCase):
         for state, result in verified:
             self.assertTrue(evaluate(sc, state.plan(sc.seed)).valid)
             self.assertAlmostEqual(result.score, state.score, places=6)
+
+
+class TripPlanTests(unittest.TestCase):
+    """All-scouts trip selection (set packing) used as a warm start."""
+    def test_pack_trips_matches_brute_force(self):
+        rng = random.Random(5)
+        for _ in range(30):
+            trips = [(rng.uniform(1, 20), f'S{rng.randrange(3)}',
+                      frozenset(rng.sample('ABCDEFG', rng.randint(1, 3))), None) for _ in range(9)]
+            value, chosen = search_planner.pack_trips(trips)
+            self.assertEqual(len({t[1] for t in chosen}), len(chosen))
+            seen = set()
+            for t in chosen:
+                self.assertFalse(seen & t[2])
+                seen |= t[2]
+            best = 0.0
+            for r in range(len(trips) + 1):
+                for combo in __import__('itertools').combinations(trips, r):
+                    scouts = [t[1] for t in combo]
+                    cids = [c for t in combo for c in t[2]]
+                    if len(set(scouts)) == len(scouts) and len(set(cids)) == len(cids):
+                        best = max(best, sum(t[0] for t in combo))
+            self.assertAlmostEqual(value, sum(t[0] for t in chosen))
+            # Greedy plus swaps is a heuristic: allow a small gap, never above optimal.
+            self.assertLessEqual(value, best + 1e-9)
+            self.assertGreaterEqual(value, 0.8 * best)
+
+    def test_cover_adds_a_trip_for_each_reachable_contact(self):
+        sc = Scenario.from_dict(generate('L4', 9))
+        search = Search(sc, seconds=10)
+        search.matrix = CandidateMatrix(sc)
+        scout = next(a for a in sc.aircraft if a.type == 'scout')
+        z = search_planner.SCOUT_LAYERS[0]
+        cands = search.trip_candidates(scout, frozenset(), set(), z)
+        plain = search_planner.trip_labels(sc, scout, cands, z, top=5)
+        covered = search_planner.trip_labels(sc, scout, cands, z, top=5, cover=True)
+        self.assertEqual(covered[:5], plain)
+        reached = {c for tr in covered for c in tr[1]}
+        self.assertGreater(len(reached), len({c for tr in plain for c in tr[1]}))
+        for c in reached:
+            self.assertTrue(any(c in tr[1] for tr in covered))
+
+    def test_trip_plan_warm_start_records_valid_plans(self):
+        sc = Scenario.from_dict(generate('L3', 4))
+        search = Search(sc, seconds=8.0, lns_share=0.3)
+        verified = search.run()
+        self.assertIn('realised', search.trip_stats)
+        self.assertTrue(any(isinstance(n['decision'], dict) and n['decision'].get('kind') == 'trip_plan'
+                            for n in search.trace))
+        self.assertIn('trip_plan', search.report(verified))
+        for state, result in verified:
+            self.assertTrue(evaluate(sc, state.plan(sc.seed)).valid)
+            self.assertAlmostEqual(result.score, state.score, places=6)
+
+    def test_trip_plan_respects_its_stop(self):
+        sc = Scenario.from_dict(generate('L4', 9))
+        search = Search(sc, seconds=20)
+        search.matrix = CandidateMatrix(sc)
+        start = time.monotonic()
+        try:
+            state = search.trip_plan(start + 0.3)
+        except search_planner.DeadlineReached:
+            state = None
+        self.assertLess(time.monotonic() - start, 1.0)
+        if state is not None:
+            self.assertTrue(evaluate(sc, state.plan(sc.seed)).valid)
