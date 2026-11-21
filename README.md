@@ -8,7 +8,7 @@ Run from this directory:
 python3 planner.py path/to/scenario.json output/plan.json
 ```
 
-The default search deadline is **55 seconds from startup**, including input loading. This leaves time inside the organisers' 60-second limit for full validation and writing the result. The required plan is written before optional diagnostics. Python imports and individual validator calls cannot be preempted: this is a cooperative deadline, not a guarantee against arbitrary machine stalls.
+The default search deadline is **45 seconds from startup**, including input loading. This leaves 15 seconds of the organisers' 60-second limit for full validation, writing the result and a slower grading machine (`--seconds` up to 55 for local experiments). The required plan is written before optional diagnostics. Python imports and individual validator calls cannot be preempted: this is a cooperative deadline, not a guarantee against arbitrary machine stalls.
 
 For a shorter run with five candidate plans and the tree:
 

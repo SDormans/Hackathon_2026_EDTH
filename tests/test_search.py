@@ -375,7 +375,14 @@ class LnsTests(unittest.TestCase):
         built = p._add_observation(scout, contact, 70.0, 0.0, 7.0)
         self.assertIsNotNone(built)
         tasks, route = built
-        self.assertEqual(scout_tour(sc, scout, tasks, 70.0, 7.0), route)
+        # The kit's tours are reproduced in eco mode; the default (fast) flies faster on purpose.
+        import search_planner as sp
+        saved = sp.SCOUT_SPEED_MODE, sp.OBS_STRETCH
+        sp.SCOUT_SPEED_MODE, sp.OBS_STRETCH = "eco", False
+        try:
+            self.assertEqual(scout_tour(sc, scout, tasks, 70.0, 7.0), route)
+        finally:
+            sp.SCOUT_SPEED_MODE, sp.OBS_STRETCH = saved
 
     def test_removal_is_valid_and_frees_the_contact(self):
         sc = Scenario.from_dict(generate('L2', 3))
