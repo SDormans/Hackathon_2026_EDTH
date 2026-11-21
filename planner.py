@@ -40,11 +40,17 @@ def main():
     parser.add_argument("--beam-width", type=int, default=6)
     parser.add_argument("--artifacts", type=Path,
                         help="optional directory for ranked plans, tree.json and interactive tree.html")
+    parser.add_argument("--alns", action="store_true",
+                        help="experimental: beam search, then ALNS on the best plan")
     args = parser.parse_args()
     if not 0 <= args.seconds <= 55 or not 1 <= args.top_n <= 100 or not 1 <= args.beam_width <= 100:
         parser.error("seconds must be 0..55; top-n and beam-width must be 1..100")
     scenario = Scenario.from_dict(load_json(args.scenario))
-    search = Search(scenario, args.seconds, args.top_n, args.beam_width, START)
+    if args.alns:
+        from alns import AlnsSearch
+        search = AlnsSearch(scenario, args.seconds, args.top_n, args.beam_width, START)
+    else:
+        search = Search(scenario, args.seconds, args.top_n, args.beam_width, START)
     verified = search.run()
     # Required output is written before optional diagnostics.
     save_json(verified[0][0].plan(scenario.seed), args.plan)
@@ -58,7 +64,7 @@ def main():
         save_tree(report, args.artifacts / "tree.html")
     print(json.dumps({key: report[key] for key in
                       ("elapsed_s", "passes", "candidate_checks", "rejections",
-                       "unserved", "unserved_points", "solutions")}), file=sys.stderr)
+                       "unserved", "unserved_points", "solutions", "alns") if key in report}), file=sys.stderr)
 
 
 if __name__ == "__main__":

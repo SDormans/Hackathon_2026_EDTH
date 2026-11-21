@@ -346,6 +346,11 @@ class Search:
                     break
 
     def run(self):
+        self.search_phase()
+        return self.finalize()
+
+    def search_phase(self):
+        """Warm start plus beam passes until self.stop."""
         try:
             self.warm_start()
         except DeadlineReached:
@@ -394,6 +399,8 @@ class Search:
                     break
         except DeadlineReached:
             pass
+
+    def finalize(self):
         # Official full validation is the authority; archive can include partial
         # plans because every scout already has its return-and-land leg.
         verified = []
