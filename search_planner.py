@@ -45,6 +45,10 @@ BEAM_DIVERSE_EXTRA = True  # diverse slots come on top of the width (else they r
 # that few remaining resources can serve weigh more.
 BOUND_RANK = True
 BOUND_WEIGHT = 1.0
+# Beam expansions may keep one non-improving serve per contact when its bound beats the parent's.
+RELAX_CHILDREN = True
+# "bound": the child's score + bound beats the parent's; "potential": beats the parent's score.
+RELAX_GATE = "bound"
 SCOUT_FANOUT = 4        # scouts tried first for a contact
 SCOUT_FALLBACK = 8      # scouts tried when none of the first SCOUT_FANOUT gives a valid child
 FULL_INSERT_TASKS = 4   # tours up to this long try every insertion position, not only 3
@@ -1337,6 +1341,7 @@ class Search:
         self.passes = 0
         # Per-contact attempt accounting for "why was this contact not served".
         self.attempts = {}
+        self._bound_rest = None
 
     def stats(self, cid):
         if cid not in self.attempts:
@@ -1575,9 +1580,12 @@ class Search:
                 options = self.strikes(parent, contact, groups, scout, route, obs_end, stop,
                                        stats, progress)
             for candidate, team in options:
+                relaxed = False
                 if candidate.score <= parent.score:
-                    self._progress(stats, progress, "not_improving")
-                    continue
+                    relaxed = self._relaxed_child(parent, candidate, state)
+                    if not relaxed:
+                        self._progress(stats, progress, "not_improving")
+                        continue
                 signature = candidate.signature()
                 if signature in seen:
                     continue
@@ -1586,10 +1594,27 @@ class Search:
                 decision = {"kind": "serve", "contact": contact.id, "scout": scout.id,
                             "effectors": [a.id for a in team]}
                 self._progress(stats, progress, "accepted")
+                if relaxed:
+                    # Extra child: does not take one of the improving children's slots.
+                    state["relaxed"] = True
+                    decision["relaxed"] = True
+                    yield candidate, decision
+                    continue
                 state["count"] += 1
                 yield candidate, decision
                 if state["count"] >= limit:
                     return
+
+    def _relaxed_child(self, parent, candidate, state):
+        """At most one non-improving child per beam expansion of a contact, when it leaves a
+        better optimistic bound for the contacts still to come than its parent does."""
+        rest = self._bound_rest
+        if not RELAX_CHILDREN or rest is None or state.get("relaxed"):
+            return False
+        if "parent_bound" not in state:
+            state["parent_bound"] = parent.score + (self.bound(parent, rest)
+                                                    if RELAX_GATE == "bound" else 0.0)
+        return candidate.score + self.bound(candidate, rest) > state["parent_bound"] + EPS
 
     def strikes(self, parent, contact, groups, scout, scout_route, obs_end, stop,
                 stats=None, progress=None):
@@ -1782,12 +1807,15 @@ class Search:
                     remaining = max(1, (len(order)-depth+1)*len(beam))
                     allowance = min(0.12, max(0.005, (self.checker.stop-time.monotonic()) / (remaining*1.5)))
                     local_stop = min(self.checker.stop, time.monotonic()+allowance)
+                    self._bound_rest = order[depth:] if BOUND_RANK else None
                     try:
                         for child, decision in self.children(parent, contact, local_stop):
                             served.append(self.record(child, parent, decision, depth))
                             next_beam.append(served[-1])
                     except DeadlineReached:
                         self.checker.check_time()  # Local cap expires without ending search.
+                    finally:
+                        self._bound_rest = None
                 unique = {}
                 for state in sorted(next_beam, key=lambda s: -s.score):
                     unique.setdefault(state.signature(), state)
