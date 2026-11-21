@@ -202,6 +202,7 @@ Every run records, for each hostile and unknown contact, how far each attempt to
 | `never_tried` | No attempt ran: no pass reached it before the deadline. |
 | `time_cap` | Attempts ran out of their per-node time before finding a valid child. |
 | `no_team` | Not enough free effectors of the needed subtypes in that branch. |
+| `scout_window` | No scout has a visit order that fits the window, strike deadlines, battery and horizon (time ranking). |
 | `scout_route` | The baseline scout builder could not fit the visit into the window when appended to the scout's tour. |
 | `scout_rule:Rn` / `strike_rule:Rn` | The scout or strike routes failed official rule Rn. |
 | `not_improving` | A valid serve existed but did not raise the score. |
