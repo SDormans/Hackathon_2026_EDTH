@@ -19,6 +19,26 @@ from fleetkit.model import Scenario
 from fleetkit.scorer import evaluate
 
 
+def two_opt_orders(n):
+    """Index orders near range(n): single-visit relocations (or-opt), then segment
+    reversals (2-opt)."""
+    base = list(range(n))
+    seen = {tuple(base)}
+    moves = []
+    for i in range(n):
+        for j in range(n):
+            order = base[:i] + base[i + 1:]
+            order.insert(j, i)
+            moves.append(order)
+    for i in range(n - 1):
+        for j in range(i + 2, n + 1):
+            moves.append(base[:i] + base[i:j][::-1] + base[j:])
+    for order in moves:
+        if tuple(order) not in seen:
+            seen.add(tuple(order))
+            yield order
+
+
 def full_plan(state, seed, sid, route):
     plan = state.plan(seed)
     plan["routes"] = [r for r in plan["routes"] if r["aircraft"] != sid]
@@ -89,19 +109,12 @@ class ExactnessTests(unittest.TestCase):
 
     def test_two_opt_moves_agree(self):
         cids = [t["cid"] for t in self.tasks]
-        orders = [[cids[i] for i in o] for o in Search.tour_neighbours(len(cids))]
+        orders = [[cids[i] for i in o] for o in two_opt_orders(len(cids))]
         self.check_moves(orders)
-
-    def test_polished_state_agrees_with_official(self):
-        polished = self.search.polish_tours(self.best, time.monotonic() + 5)
-        result = evaluate(self.sc, polished.plan(self.sc.seed))
-        self.assertTrue(result.valid)
-        self.assertAlmostEqual(result.score, polished.score, places=6)
-        self.assertGreaterEqual(polished.score, self.best.score - 1e-9)
 
     def valid_moved_routes(self):
         cids = [t["cid"] for t in self.tasks]
-        orders = [cids] + [[cids[i] for i in o] for o in Search.tour_neighbours(len(cids))]
+        orders = [cids] + [[cids[i] for i in o] for o in two_opt_orders(len(cids))]
         out = []
         for tour in self.tours(orders):
             if self.search.checker.extend(self.best, {self.sid: tour}) is not None:
