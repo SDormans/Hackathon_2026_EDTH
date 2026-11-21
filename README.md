@@ -304,3 +304,54 @@ without diagnostics are counted as cases without detail, never as zero failures.
 Repeated cases across runs count as repeated observations; use `--history` to select
 a separate collection for a controlled comparison. Primary reasons summarise the
 search attempts, not proof that a contact is physically impossible to serve.
+
+## Link-loss policy (optional second part)
+
+`policy.py` is the per-aircraft policy for the organisers' link-loss challenge (`LINKLOSS.md` in the official kit). It is scored separately from the planner and is handed in next to `planner.py`.
+
+- **Reclassified target:** an effector senses its target within 300 m, before reaching it, and turns back.
+- **Pop-up zone:** every move is checked against the zones an aircraft knows; it never enters one, including when turning back.
+- **Confirm before engage (R4):** an effector engages only when it knows the observation ended at least 11.5 s earlier. Observations finished before the cut come from the plan; later ones come from the scout's message, which carries the end time. Otherwise it waits short of the target, then turns back.
+- **Separation (R8):** each aircraft predicts its peers from the plan and from their announced (route time, rate), with ±1.5 s for stale messages and drones about to take off, and picks the move that keeps at least 55 m.
+- **Messages:** only rate changes (repeated, then refreshed every 8 s while off schedule) and scout observation notices.
+- **Wire format:** one JSON string of type-coded records (`V` rate state, `O` observation, `R` reclassified, `Z` zone), base-93 printable ASCII, 1 byte per character; see the `policy.py` docstring. Same decisions as the dict format, fewer bytes; news-distribution columns (coverage, reach 90 %, t90, missed) are in `compare`.
+- **News (store and forward, on):** `NEWS_MODE = "forward"`. Each drone keeps every sensed or heard danger (reclassified contact, pop-up zone) and the peers it knows have it (heard it from them, or sent it 3 times while they were within half its estimated range). Each second it predicts peers from the plan and sends a danger only when a peer that may lack it is in reach; the range is estimated from the farthest distance a peer was heard from. `"burst"` (send 3 times on learning) and `"off"` remain available.
+- **Measured news distribution** (20 cases, L1-L4 seeds 0-4, one comm seed; drones airborne at the event that were still flying at the end and never knew it): off 12/16/25/19, burst 11/12/11/6, forward 7/3/2/1 at 250/500/1000/2000 m; capacity made no difference (messages are a few bytes). Messages about 8 per aircraft per minute in all three.
+- **Score:** with 3 comm seeds at 4 ranges (240 runs each) failed runs were off 19, forward 22, and forward that ignores heard news 22; S_loss 0.865 / 0.855 / 0.852, a difference within noise. Acting on news neither causes nor prevents failures, and safe runs keep identical retention, because the policy's only use of news is aborting earlier. All failures are separation (R8), mostly at 250 m: that is the next thing to fix.
+
+- **Coordination (on):** each drone now uses its picture of the fleet to stay on the plan rather than react to it. Pairs both on schedule trust the validated plan (`TRUST_PLAN`); scouts report the exact observation end (`EXACT_OBS_END`); a confirmed effector waits for late strike partners so the group still engages inside the sync window (`GROUP_SYNC`); an unconfirmed effector waits for a scout it knows is late while the window allows (`SCOUT_WAIT`). In safe runs before this, every contact lost against the oracle was a strike that missed sync because partners at the shared target backed off and reversed into one another.
+- **Measured** (20 cases L1-L4 seeds 0-4, 250/500/1000/2000 m at 200 B/s, 3 comm seeds, 240 runs): S_loss 0.855 → 0.926, failed runs 22 → 12, retention of safe runs 0.960 → 0.992; at 1000 and 2000 m 0 failures and retention 0.999-1.000. Unseen seeds 20-29 (1000 and 250 m, 2 comm seeds, 160 runs): S_loss 0.732 → 0.833, failed 28 → 20. 17 runs were fixed and 7 newly broken, all R8 at 250-500 m; the remaining failures are mostly `lost_message` at 250 m. Tried and dropped: assuming an off-plan peer may have stopped anywhere since its last message (fixed 500 m, but frozen "ghosts" of engaged effectors boxed others in: 24 failures).
+
+Run the official check (with the updated official kit on `PYTHONPATH`):
+
+```sh
+python3 handin/check_policy.py --policy /path/to/policy.py --levels L1,L2,L3,L4 --seeds 0-1
+```
+
+Leaderboard setting (1000 m, 200 B/s), greedy plans, 40 unseen scenarios (L1–L4, seeds 20–29, 2 communication seeds each):
+
+| Policy | S_loss | Retention | Failed runs |
+|---|---:|---:|---:|
+| hold | 0.361 | 0.361 | 4/80 |
+| return | 0.366 | 0.366 | 2/80 |
+| broadcast | 0.292 | 0.412 | 47/80 |
+| **policy.py** | **0.799** | **0.817** | **9/80** |
+
+About 9 messages per aircraft per minute and under 0.2 ms per call. The remaining failures are all separation (R8) between aircraft that leave the plan close together, mostly on L4.
+
+### Link-loss knowledge store
+
+`analysis/linkloss_knowledge.py` records what every drone knew, second by second, and where each fact came from (`self`, `plan`, `sensed`, `heard` with the sender, `inferred`), plus believed versus real peer positions whenever two drones are within 200 m, event learning time against the time it was needed, and a timeline around each separation failure. The recorder never changes a run (tested).
+
+```sh
+python3 analysis/linkloss_knowledge.py --history --note "what changed" --policy my_policy.py \
+  --levels L1,L2,L3,L4 --seeds 0-4 --settings 250x200,500x200,1000x200,2000x200 --comm-seeds 3 --workers 12
+python3 analysis/linkloss_knowledge.py compare                 # every stored collection, per setting
+python3 analysis/linkloss_knowledge.py diff BEFORE_DIR AFTER_DIR  # run by run: fixed, broken
+```
+
+Compare policies with at least 3 comm seeds: extra messages change the random delivery draws of the whole run, and with one seed off and store-and-forward looked like 6 against 15 failures, which 3 seeds showed to be 19 against 22 in 240 runs. Capacity made no difference so far, so one capacity per range is enough. A full 20-setting collection is about 25 MB: store in `history/` the collections worth keeping and use `output/` (the default without `--history`) for the rest.
+
+**Using news in your own policy.** Everything is in `policy.py` and can be copied as is: the codec (`encode_records`, `decode_records`, contacts numbered in scenario order, `cw` digits wide), `_learn` (decodes the inbox into `reclassified`, `zones`, `confirmed`, `peer_state`), `_note_news` and `_forward` (store and forward), `_peer_where` (peer prediction from the plan, including drones on the ground). A policy that keeps the same attribute names (`reclassified`, `zones`, `confirmed`, `peer_state`, `aborted`, `rate`, `_peer_pos`, `peers`) is fully recorded by the knowledge store; others can define `knowledge()` returning `{fact: value}`.
+
+`--history` stores the collection in Git-tracked `history/linkloss/<id>/` (one directory per collection, about 5-6 MB for 80 runs): `collection.json` (note, settings, policy SHA-256, kit hash, Git state, per-setting S_loss), the exact `policy.py`, `runs.jsonl`, `report.md`, `cases/*.json.gz` (scenario, plan, events) and `runs/*.json.gz` (`summary`, `facts`, `steps`, `near`). Load with `load_run`, `load_case`, `iter_collections`. Without `--history` it writes under ignored `output/`. Plans are the greedy baseline, as in `check_policy.py`.

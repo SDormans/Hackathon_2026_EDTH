@@ -118,7 +118,7 @@ def main():
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--token", required=True, help="Leaderboard token")
     parser.add_argument("--team", default="ELARIS", help="Team name (default: ELARIS)")
-    parser.add_argument("--server", default="http://192.168.2.19:8080/",
+    parser.add_argument("--server", default="https://securities-titten-administration-pipe.trycloudflare.com",
                         help="Leaderboard server URL")
     parser.add_argument("--skip-generate", action="store_true",
                         help="Skip scenario generation (reuse existing validation/)")
