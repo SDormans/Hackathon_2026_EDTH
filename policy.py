@@ -14,7 +14,24 @@ Failure modes the policy guards against (each one sets retention to 0):
   (route time, rate). Each second it picks, among the moves that serve its intent, the one
   that keeps the most room over the next few seconds, and announces its rate when it changes.
 
-Messages cost score, so the only messages are rate changes and "observed" notices.
+Messages cost score, so the only messages are rate changes, "observed" notices and news of
+a sensed danger (a reclassified contact or a pop-up zone). News is shared and relayed so the
+drone it affects hears it long before it would sense it at 300 m: each drone that learns a
+danger sends it NEWS_SENDS times, and stops early once two peers have echoed it back (they
+have it and are spreading it: an implicit acknowledgement, at no extra message cost).
+
+Wire format: one JSON string of concatenated records. The first character is the type and
+fixes the length of what follows; fields are base-93 digits over printable ASCII without
+'"' and '\\', so every character costs one byte.
+
+    V tau(3) rate(1)          my route time (0.1 s) and rate: announced deviation
+    O contact(c) end_t(2)     observation of contact ended at end_t (s)
+    R contact(c)              contact reclassified (now friendly)
+    Z x(2) y(2) radius(1)     pop-up zone: centre to 1 m, radius rounded up (top 200 m)
+
+Contacts are numbered in the scenario's order, which every drone knows; c is 1 digit for up
+to 93 contacts, else 2. A decoder stops at
+the first record it does not understand, so a malformed message never raises.
 """
 import math
 
@@ -33,6 +50,93 @@ REPEAT_S = 4.0
 REFRESH_S = 8.0         # an off-schedule aircraft re-announces its state this often
 EXEMPT_MARGIN_M = 25.0  # use the shared-target exemption only well inside its radius
 SLACK_S = 1.5           # timing uncertainty of an announced peer state          # a changed rate is repeated once after this long (lost messages)
+NEWS_SENDS = 0          # times a drone sends each danger it learns; 0 = off (3 measured worse: more R8, see README)
+NEWS_GAP_S = 2.0        # seconds between those sends
+NEWS_ECHOES = 2         # stop sending a danger once this many peers have been heard sending it
+MAX_TEXT = 62           # 64 bytes minus the two quotes of a JSON string
+
+# ---------------------------------------------------------------------- compact wire format
+ALPHABET = "".join(chr(c) for c in range(32, 127) if chr(c) not in '"\\')
+BASE = len(ALPHABET)    # 93
+DIGIT = {ch: i for i, ch in enumerate(ALPHABET)}
+COORD_OFFSET = 1000     # x, y in metres + offset, in two digits: -1000 m to 7648 m
+RADIUS_OFFSET = 40      # radius - offset in one digit: 40 m to 132 m
+ZONE_TOP_M = 200.0
+ZONE_PAD_M = 1.5        # decoded zones are inflated to cover the rounding of the centre
+
+
+def enc(value, width):
+    """Non-negative integer as `width` base-93 characters (clamped to the range)."""
+    value = max(0, min(int(value), BASE ** width - 1))
+    out = []
+    for _ in range(width):
+        value, r = divmod(value, BASE)
+        out.append(ALPHABET[r])
+    return "".join(reversed(out))
+
+
+def dec(text):
+    value = 0
+    for ch in text:
+        value = value * BASE + DIGIT[ch]
+    return value
+
+
+def _fields(cw):
+    return {"V": 4, "O": cw + 2, "R": cw, "Z": 5}
+
+
+def encode_records(records, cw=1):
+    """Records (tuples) to one message string; records that do not fit are left out.
+
+    `cw` is the width of a contact number: 1 digit for up to 93 contacts, else 2. A record whose
+    values fall outside the format's range is left out rather than clamped to a wrong value.
+    """
+    text = ""
+    for rec in records:
+        kind = rec[0]
+        if kind == "V":
+            part = "V" + enc(round(rec[1] * 10), 3) + enc(round((rec[2] + 1.0) * 20), 1)
+        elif kind == "O" and rec[1] < BASE ** cw:
+            part = "O" + enc(rec[1], cw) + enc(rec[2], 2)
+        elif kind == "R" and rec[1] < BASE ** cw:
+            part = "R" + enc(rec[1], cw)
+        elif kind == "Z":
+            x, y = round(rec[1]) + COORD_OFFSET, round(rec[2]) + COORD_OFFSET
+            r = math.ceil(rec[3]) - RADIUS_OFFSET
+            if not (0 <= x < BASE ** 2 and 0 <= y < BASE ** 2 and 0 <= r < BASE):
+                continue
+            part = "Z" + enc(x, 2) + enc(y, 2) + enc(r, 1)
+        else:
+            continue
+        if len(text) + len(part) <= MAX_TEXT:
+            text += part
+    return text
+
+
+def decode_records(text, cw=1):
+    """Message string to records; stops at the first unknown or truncated record."""
+    out, i = [], 0
+    if not isinstance(text, str):
+        return out
+    fields = _fields(cw)
+    while i < len(text):
+        kind = text[i]
+        n = fields.get(kind)
+        body = text[i + 1:i + 1 + n] if n else ""
+        if n is None or len(body) < n or any(ch not in DIGIT for ch in body):
+            break
+        if kind == "V":
+            out.append(("V", dec(body[:3]) / 10.0, dec(body[3]) / 20.0 - 1.0))
+        elif kind == "O":
+            out.append(("O", dec(body[:cw]), dec(body[cw:])))
+        elif kind == "R":
+            out.append(("R", dec(body)))
+        else:
+            out.append(("Z", dec(body[:2]) - COORD_OFFSET, dec(body[2:4]) - COORD_OFFSET,
+                        dec(body[4]) + RADIUS_OFFSET))
+        i += 1 + n
+    return out
 
 
 def _d(a, b):
@@ -51,6 +155,10 @@ class Policy:
         self.sep = rules.d_sep_m + SEP_MARGIN_M
         self.exempt = rules.exempt_radius_m - EXEMPT_MARGIN_M
         self.contacts = scenario.contact_by_id()
+        self.contact_ids = [c.id for c in scenario.contacts]          # shared numbering for the wire
+        self.contact_index = {c: i for i, c in enumerate(self.contact_ids)}
+        self.cw = 1 if len(self.contact_ids) <= BASE else 2
+        self.news = {}                 # danger key -> {"rec", "left", "next", "echoes"}
         self.margin = rules.confirm_margin_s + 1.5   # observation end to engagement, with slack
         self.target = self._target(self.route, self.ac)
         self.engage_t = self.route.waypoints[-1].t if self.target else None
@@ -84,21 +192,48 @@ class Policy:
         if self.confirmed is None:
             # contact -> time its observation ended (planned ends before the cut are exact)
             self.confirmed = {c: min(ends) for c, ends in self.obs_end.items() if min(ends) <= obs["t_loss"]}
+        t = obs["t"]
         for e in obs["sensed"]:
             if e["kind"] == "reclassify":
-                self.reclassified.add(e["contact"])
+                self._learn_reclassified(e["contact"], t)
             elif e["kind"] == "popup_zone":
-                z = (e["center"][0], e["center"][1], e["radius_m"], e["top_m"])
-                if z not in self.zones:
-                    self.zones.append(z)
+                self._learn_zone((e["center"][0], e["center"][1], e["radius_m"], e["top_m"]), t)
         for m in obs["inbox"]:
-            p = m["payload"]
-            for c, end in p.get("o", ()):
-                if c not in self.confirmed or end < self.confirmed[c]:
-                    self.confirmed[c] = end
-            if "r" in p:
-                tau, rate = p["r"]
-                self.peer_state[m["from"]] = (tau, rate, m["sent_t"])
+            for rec in decode_records(m["payload"], self.cw):
+                kind = rec[0]
+                if kind == "V":
+                    self.peer_state[m["from"]] = (rec[1], rec[2], m["sent_t"])
+                elif kind == "O" and rec[1] < len(self.contact_ids):
+                    c, end = self.contact_ids[rec[1]], rec[2]
+                    if c not in self.confirmed or end < self.confirmed[c]:
+                        self.confirmed[c] = end
+                elif kind == "R" and rec[1] < len(self.contact_ids):
+                    self._learn_reclassified(self.contact_ids[rec[1]], t, m["from"])
+                elif kind == "Z":
+                    self._learn_zone((rec[1], rec[2], rec[3] + ZONE_PAD_M, ZONE_TOP_M), t, m["from"])
+
+    def _note_news(self, key, rec, t, sender):
+        """Queues a danger for sending, or counts a peer's echo of one we already have."""
+        item = self.news.get(key)
+        if item is None:
+            item = self.news[key] = {"rec": rec, "left": NEWS_SENDS, "next": t, "echoes": set()}
+        if sender is not None:
+            item["echoes"].add(sender)
+            if len(item["echoes"]) >= NEWS_ECHOES:
+                item["left"] = 0          # peers have it and are spreading it
+
+    def _learn_reclassified(self, contact, t, sender=None):
+        self.reclassified.add(contact)
+        if contact in self.contact_index:
+            self._note_news(("R", contact), ("R", self.contact_index[contact]), t, sender)
+
+    def _learn_zone(self, z, t, sender=None):
+        same = next((k for k in self.zones if abs(k[0] - z[0]) <= 3 and abs(k[1] - z[1]) <= 3
+                     and abs(k[2] - z[2]) <= 3), None)
+        if same is None:
+            self.zones.append(z)
+            same = z
+        self._note_news(("Z", round(same[0]), round(same[1])), ("Z", same[0], same[1], same[2]), t, sender)
 
     def _hits_zone(self, tau_from, tau_to=None):
         if not self.zones:
@@ -215,7 +350,7 @@ class Policy:
 
     def _message(self, obs, tau, rate):
         t = obs["t"]
-        msg = {}
+        records = []
         if self.ac.type == SCOUT:
             for c in obs["own_observed"]:
                 if c not in self.reported:
@@ -223,8 +358,7 @@ class Policy:
                     if c in self.last_engage:
                         self.announce[c] = self.last_engage[c] + ANNOUNCE_AFTER_S
             live = sorted(c for c, until in self.announce.items() if t <= until)
-            if live:
-                msg["o"] = [[c, self.reported[c]] for c in live[:2]]
+            records += [("O", self.contact_index[c], self.reported[c]) for c in live[:2]]
         changed = self.sent is None and rate != 1.0 or self.sent is not None and rate != self.sent[0]
         off = abs(tau - t) > 0.25 or rate != 1.0
         due = self.sent is not None and off and t - self.last_sent >= (REPEAT_S if self.repeats < 1 else REFRESH_S)
@@ -233,6 +367,11 @@ class Policy:
         elif due:
             self.repeats += 1
         if changed or due:
-            msg["r"] = [round(tau, 1), rate]
+            records.insert(0, ("V", tau, rate))         # own state first: separation depends on it
             self.last_sent = t
-        return msg or None
+        for item in self.news.values():
+            if item["left"] > 0 and t >= item["next"]:
+                records.append(item["rec"])
+                item["left"] -= 1
+                item["next"] = t + NEWS_GAP_S
+        return encode_records(records, self.cw) or None

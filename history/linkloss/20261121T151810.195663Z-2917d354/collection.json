@@ -1,0 +1,78 @@
+{
+ "schema": 1,
+ "collection": "20261121T151810.195663Z-2917d354",
+ "started_at": "2026-11-21T15:18:10.195663+00:00",
+ "status": "complete",
+ "note": "v2 compact codec, news sharing off",
+ "settings": {
+  "cases": [
+   "L1:0",
+   "L1:1",
+   "L1:2",
+   "L1:3",
+   "L1:4",
+   "L2:0",
+   "L2:1",
+   "L2:2",
+   "L2:3",
+   "L2:4",
+   "L3:0",
+   "L3:1",
+   "L3:2",
+   "L3:3",
+   "L3:4",
+   "L4:0",
+   "L4:1",
+   "L4:2",
+   "L4:3",
+   "L4:4"
+  ],
+  "event_seed": null,
+  "settings": [
+   [
+    1000.0,
+    200.0
+   ],
+   [
+    250.0,
+    50.0
+   ]
+  ],
+  "comm_seeds": 2,
+  "near_m": 200.0,
+  "workers": 8,
+  "plans": "greedy baseline"
+ },
+ "provenance": {
+  "policy": {
+   "spec": "policy.py",
+   "sha256": "88606b5aac77b222991bc92da31e21b6e869766c38d1da5e0635b6e5336e028b",
+   "short": "88606b5aac77"
+  },
+  "kit_linkloss_sha256": "5285458f919cdfbc26f20ae23462b4f07b36610b69a469b77a9cd424ef7088a9",
+  "git": {
+   "commit": "06dd80d47731d9d36164f57abb12b8ba248b878f",
+   "branch": "linkloss",
+   "dirty": true
+  },
+  "python": "3.10.13",
+  "platform": "macOS-26.6.2"
+ },
+ "finished_at": "2026-11-21T15:20:17.894560+00:00",
+ "by_setting": {
+  "1000x200": {
+   "runs": 40,
+   "failed": 2,
+   "retention": 0.9051,
+   "messages_per_aircraft_per_min": 8.024,
+   "s_loss": 0.889
+  },
+  "250x50": {
+   "runs": 40,
+   "failed": 4,
+   "retention": 0.8551,
+   "messages_per_aircraft_per_min": 7.522,
+   "s_loss": 0.8401
+  }
+ }
+}

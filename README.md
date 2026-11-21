@@ -313,6 +313,8 @@ search attempts, not proof that a contact is physically impossible to serve.
 - **Confirm before engage (R4):** an effector engages only when it knows the observation ended at least 11.5 s earlier. Observations finished before the cut come from the plan; later ones come from the scout's message, which carries the end time. Otherwise it waits short of the target, then turns back.
 - **Separation (R8):** each aircraft predicts its peers from the plan and from their announced (route time, rate), with ±1.5 s for stale messages and drones about to take off, and picks the move that keeps at least 55 m.
 - **Messages:** only rate changes (repeated, then refreshed every 8 s while off schedule) and scout observation notices.
+- **Wire format:** one JSON string of type-coded records (`V` rate state, `O` observation, `R` reclassified, `Z` zone), base-93 printable ASCII, 1 byte per character; see the `policy.py` docstring. Same decisions as the dict format, fewer bytes.
+- **News sharing (off by default):** `NEWS_SENDS = 3` relays sensed reclassifications and zones with echo suppression. Affected drones then hear 85 of 212 dangers before sensing them, but on L1-L4 seeds 0-4 it scored lower (S_loss 0.874 vs 0.889 at 1000x200, 0.791 vs 0.840 at 250x50) with more R8 failures: earlier aborts put more drones off plan. Needs better separation handling first.
 
 Run the official check (with the updated official kit on `PYTHONPATH`):
 
@@ -330,3 +332,15 @@ Leaderboard setting (1000 m, 200 B/s), greedy plans, 40 unseen scenarios (L1–L
 | **policy.py** | **0.799** | **0.817** | **9/80** |
 
 About 9 messages per aircraft per minute and under 0.2 ms per call. The remaining failures are all separation (R8) between aircraft that leave the plan close together, mostly on L4.
+
+### Link-loss knowledge store
+
+`analysis/linkloss_knowledge.py` records what every drone knew, second by second, and where each fact came from (`self`, `plan`, `sensed`, `heard` with the sender, `inferred`), plus believed versus real peer positions whenever two drones are within 200 m, event learning time against the time it was needed, and a timeline around each separation failure. The recorder never changes a run (tested).
+
+```sh
+python3 analysis/linkloss_knowledge.py --history --note "what changed" \
+  --levels L1,L2,L3,L4 --seeds 0-4 --settings 1000x200,250x50 --workers 8
+python3 analysis/linkloss_knowledge.py compare      # every stored collection, per setting
+```
+
+`--history` stores the collection in Git-tracked `history/linkloss/<id>/` (one directory per collection, about 5-6 MB for 80 runs): `collection.json` (note, settings, policy SHA-256, kit hash, Git state, per-setting S_loss), the exact `policy.py`, `runs.jsonl`, `report.md`, `cases/*.json.gz` (scenario, plan, events) and `runs/*.json.gz` (`summary`, `facts`, `steps`, `near`). Load with `load_run`, `load_case`, `iter_collections`. Without `--history` it writes under ignored `output/`. Plans are the greedy baseline, as in `check_policy.py`.
