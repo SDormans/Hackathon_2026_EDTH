@@ -15,10 +15,16 @@ Failure modes the policy guards against (each one sets retention to 0):
   that keeps the most room over the next few seconds, and announces its rate when it changes.
 
 Messages cost score, so the only messages are rate changes, "observed" notices and news of
-a sensed danger (a reclassified contact or a pop-up zone). News is shared and relayed so the
-drone it affects hears it long before it would sense it at 300 m: each drone that learns a
-danger sends it NEWS_SENDS times, and stops early once two peers have echoed it back (they
-have it and are spreading it: an implicit acknowledgement, at no extra message cost).
+a sensed danger (a reclassified contact or a pop-up zone). NEWS_MODE picks how news spreads:
+
+- "off": never sent;
+- "burst": each drone that learns a danger sends it NEWS_SENDS times, stopping early once two
+  peers have echoed it back;
+- "forward" (store and forward): each drone keeps every danger it knows and, per danger, the
+  peers it knows have it (it heard the danger from them, or sent it FWD_TRIES times while they
+  were close). Each second it predicts every peer from the plan and sends a danger only when a
+  peer that may lack it is within its estimated reach. The reach is learnt from how far away
+  peers are heard, since the radio range is not observed.
 
 Wire format: one JSON string of concatenated records. The first character is the type and
 fixes the length of what follows; fields are base-93 digits over printable ASCII without
@@ -50,9 +56,17 @@ REPEAT_S = 4.0
 REFRESH_S = 8.0         # an off-schedule aircraft re-announces its state this often
 EXEMPT_MARGIN_M = 25.0  # use the shared-target exemption only well inside its radius
 SLACK_S = 1.5           # timing uncertainty of an announced peer state          # a changed rate is repeated once after this long (lost messages)
-NEWS_SENDS = 0          # times a drone sends each danger it learns; 0 = off (3 measured worse: more R8, see README)
+NEWS_SENDS = 3          # burst mode: times a drone sends each danger it learns
 NEWS_GAP_S = 2.0        # seconds between those sends
 NEWS_ECHOES = 2         # stop sending a danger once this many peers have been heard sending it
+NEWS_MODE = "forward"   # "off", "burst" or "forward" (store and forward)
+FWD_TRIES = 3           # sends at close range before a peer is assumed to have the danger
+FWD_GAP_S = 2.0         # seconds between those sends
+FWD_FAR_TRIES = 6       # sends at far range (delivery uncertain), never counted as delivered
+FWD_FAR_GAP_S = 5.0
+FWD_CLOSE_SHARE = 0.5   # close = within this share of the estimated range (delivery ~95 %)
+FWD_FAR_SHARE = 0.95    # far = up to this share of it
+FWD_RANGE_MIN_M = 240.0  # range estimate before anything was heard (the smallest range in the grid)
 MAX_TEXT = 62           # 64 bytes minus the two quotes of a JSON string
 
 # ---------------------------------------------------------------------- compact wire format
@@ -158,7 +172,8 @@ class Policy:
         self.contact_ids = [c.id for c in scenario.contacts]          # shared numbering for the wire
         self.contact_index = {c: i for i, c in enumerate(self.contact_ids)}
         self.cw = 1 if len(self.contact_ids) <= BASE else 2
-        self.news = {}                 # danger key -> {"rec", "left", "next", "echoes"}
+        self.news = {}                 # danger key -> {"rec", "left", "next", "echoes", "informed", ...}
+        self.heard_max_d = 0.0         # farthest distance a peer was heard from (estimates the range)
         self.margin = rules.confirm_margin_s + 1.5   # observation end to engagement, with slack
         self.target = self._target(self.route, self.ac)
         self.engage_t = self.route.waypoints[-1].t if self.target else None
@@ -199,6 +214,9 @@ class Policy:
             elif e["kind"] == "popup_zone":
                 self._learn_zone((e["center"][0], e["center"][1], e["radius_m"], e["top_m"]), t)
         for m in obs["inbox"]:
+            where = self._peer_where(m["from"], t)
+            if where is not None:                          # how far a message can come from
+                self.heard_max_d = max(self.heard_max_d, _d(where, obs["pos"]))
             for rec in decode_records(m["payload"], self.cw):
                 kind = rec[0]
                 if kind == "V":
@@ -216,11 +234,63 @@ class Policy:
         """Queues a danger for sending, or counts a peer's echo of one we already have."""
         item = self.news.get(key)
         if item is None:
-            item = self.news[key] = {"rec": rec, "left": NEWS_SENDS, "next": t, "echoes": set()}
+            item = self.news[key] = {"rec": rec, "left": NEWS_SENDS if NEWS_MODE == "burst" else 0, "next": t,
+                                     "echoes": set(), "informed": set(), "tries": {}, "far": {}, "next_to": {}}
         if sender is not None:
             item["echoes"].add(sender)
+            item["informed"].add(sender)  # it sent the danger, so it has it
             if len(item["echoes"]) >= NEWS_ECHOES:
                 item["left"] = 0          # peers have it and are spreading it
+
+    def _peer_where(self, aid, t):
+        """Predicted position of a peer that can still receive: airborne, or on the ground before take-off."""
+        if aid not in self.peers:
+            return None
+        p = self._peer_pos(aid, t)
+        if p is None:
+            clock = self.peers[aid][0]
+            if aid not in self.peer_state and t <= clock.start:
+                p = clock.pos[0]
+        return p
+
+    def _forward(self, obs, records):
+        """Store and forward: add each danger a peer within reach may lack (see NEWS_MODE).
+
+        The range is estimated as the farthest distance a peer was heard from. A peer within half of
+        it receives with about 95 % chance, so FWD_TRIES sends there count as delivered; farther out
+        a few spaced sends are tried without counting them.
+        """
+        t, here = obs["t"], obs["pos"]
+        rng = max(FWD_RANGE_MIN_M, self.heard_max_d)
+        close_m, far_m = FWD_CLOSE_SHARE * rng, FWD_FAR_SHARE * rng
+        dist = {}
+        for item in self.news.values():
+            targets = []
+            for pid in self.peers:
+                if pid in item["informed"] or t < item["next_to"].get(pid, -1e9):
+                    continue
+                if pid not in dist:
+                    p = self._peer_where(pid, t)
+                    dist[pid] = None if p is None else _d(p, here)
+                d = dist[pid]
+                if d is None or d > far_m:
+                    continue
+                if d <= close_m:
+                    targets.append((pid, True))
+                elif item["far"].get(pid, 0) < FWD_FAR_TRIES:
+                    targets.append((pid, False))
+            if not targets:
+                continue
+            records.append(item["rec"])
+            for pid, close in targets:
+                if close:
+                    n = item["tries"][pid] = item["tries"].get(pid, 0) + 1
+                    item["next_to"][pid] = t + FWD_GAP_S
+                    if n >= FWD_TRIES:
+                        item["informed"].add(pid)   # three sends at close range: assume it arrived
+                else:
+                    item["far"][pid] = item["far"].get(pid, 0) + 1
+                    item["next_to"][pid] = t + FWD_FAR_GAP_S
 
     def _learn_reclassified(self, contact, t, sender=None):
         self.reclassified.add(contact)
@@ -369,9 +439,12 @@ class Policy:
         if changed or due:
             records.insert(0, ("V", tau, rate))         # own state first: separation depends on it
             self.last_sent = t
-        for item in self.news.values():
-            if item["left"] > 0 and t >= item["next"]:
-                records.append(item["rec"])
-                item["left"] -= 1
-                item["next"] = t + NEWS_GAP_S
+        if NEWS_MODE == "forward":
+            self._forward(obs, records)
+        elif NEWS_MODE == "burst":
+            for item in self.news.values():
+                if item["left"] > 0 and t >= item["next"]:
+                    records.append(item["rec"])
+                    item["left"] -= 1
+                    item["next"] = t + NEWS_GAP_S
         return encode_records(records, self.cw) or None

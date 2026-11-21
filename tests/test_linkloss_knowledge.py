@@ -40,7 +40,7 @@ class RecorderTests(unittest.TestCase):
     def test_run_is_stored_and_attributes_sources(self):
         sharing = Path(self.tmp.name) / 'policy_sharing.py'      # news sharing is off by default
         src = (ROOT / 'policy.py').read_text()
-        sharing.write_text(re.sub(r'^NEWS_SENDS = \d+', 'NEWS_SENDS = 3', src, flags=re.M))
+        sharing.write_text(re.sub(r'^NEWS_MODE = .*$', 'NEWS_MODE = "forward"', src, flags=re.M))
         run_path = Path(self.tmp.name) / 'runs' / 'L2-7_1000x200_c0.json.gz'
         summary = lk.run_one((str(self.case), str(sharing), (1000.0, 200.0), 0, str(run_path), 200.0))
         run = lk.load_run(run_path)
@@ -51,7 +51,9 @@ class RecorderTests(unittest.TestCase):
         self.assertIn('sensed', sources)
         heard_rc = [f for f in run['facts'] if f['fact'].startswith('rc:') and f['source'] == 'heard']
         self.assertTrue(heard_rc, 'policy.py shares reclassifications')
-        self.assertTrue(all(f.get('from') and ',' not in f['from'] for f in heard_rc), 'the carrier is named')
+        drones = {st['drone'] for st in run['steps']}
+        for f in heard_rc:     # one or more carriers (two peers can send it in the same second)
+            self.assertTrue(f.get('from') and set(f['from'].split(',')) <= drones, f)
         self.assertTrue([r for r in summary['event_learning'] if r.get('affected')])
 
     def test_collection_is_stored_with_provenance_and_compared(self):

@@ -304,6 +304,51 @@ def event_table(scenario, plan, events, facts):
     return rows
 
 
+def _reach_delay(delays, n, share):
+    """Seconds after the event until `share` of the n drones knew it, or None if never."""
+    need = math.ceil(share * n)
+    return delays[need - 1] if need <= len(delays) else None
+
+
+def news_distribution(events, table, steps):
+    """How far and how fast each danger spread through the fleet.
+
+    The audience of an event is every drone airborne when it happened. Per event: coverage (share
+    of the audience that ever knew it), seconds until 50 / 90 / 100 % knew, how many learned by
+    sensing and by hearing, and the drones still airborne at the end that never knew (missed;
+    drones that engaged, landed or were lost first are not counted as missed).
+    """
+    active = {}
+    for st in steps:
+        active.setdefault(st["t"], set()).add(st["drone"])
+    last_seen = {}
+    for st in steps:
+        last_seen[st["drone"]] = max(last_seen.get(st["drone"], st["t"]), st["t"])
+    end_t = max(active) if active else 0.0
+    out = []
+    for e in events["events"]:
+        fact = _event_fact(e)
+        if fact is None:
+            continue
+        t0 = min((t for t in active if t >= e["t"]), default=None)
+        if t0 is None:
+            continue
+        audience = active[t0]
+        rows = {r["drone"]: r for r in table if r.get("event") == fact and r["drone"] in audience}
+        delays = sorted(r["learned_t"] - e["t"] for r in rows.values() if r["learned_t"] is not None)
+        n = len(audience)
+        missed = sorted(d for d in audience if rows.get(d, {}).get("learned_t") is None and last_seen.get(d) == end_t)
+        src = {}
+        for r in rows.values():
+            if r["learned_t"] is not None:
+                src[r["source"]] = src.get(r["source"], 0) + 1
+        out.append({"event": fact, "t": e["t"], "audience": n, "knew": len(delays),
+                    "coverage": round(len(delays) / n, 4) if n else None,
+                    "t50_s": _reach_delay(delays, n, 0.5), "t90_s": _reach_delay(delays, n, 0.9),
+                    "t100_s": _reach_delay(delays, n, 1.0), "by_source": src, "missed": missed})
+    return out
+
+
 SEP_RE = re.compile(r"R8 \(separation\): (\S+) and (\S+) come within ([\d.]+) m.*?t = ([\d.]+) s")
 
 
@@ -529,6 +574,7 @@ def run_one(task):
     retention = 0.0 if result.failed or not v_oracle else min(1.0, result.points / v_oracle)
     near = near_rows(rec, near_m)
     table = event_table(sc, plan, events, rec.facts)
+    spread = news_distribution(events, table, rec.steps)
     context = failure_context(rec, result.failed)
     probe = inner_factory(sc, plan, next(iter(sorted(parse_plan(plan)[0]))))
     classify_failures(rec, context, sc, plan, getattr(probe, "sep", sc.rules.d_sep_m))
@@ -543,7 +589,7 @@ def run_one(task):
         "s_loss": round(retention - MU * result.messages_per_aircraft_per_min, 4),
         "facts_recorded": len(rec.facts), "near_samples": len(near),
         "max_belief_error_near_m": max(errors) if errors else None,
-        "event_learning": table, "failure_context": context, "seconds": round(time.monotonic() - started, 2),
+        "news_distribution": spread, "event_learning": table, "failure_context": context, "seconds": round(time.monotonic() - started, 2),
     }
     save_gz(run_path, {"schema": SCHEMA, "summary": summary, "facts": rec.facts, "steps": rec.steps, "near": near})
     return summary
@@ -593,7 +639,22 @@ def by_setting(summaries):
         msgs = statistics.mean(r["messages_per_aircraft_per_min"] for r in rows)
         out[key] = {"runs": len(rows), "failed": sum(bool(r["failed"]) for r in rows), "retention": round(ret, 4),
                     "messages_per_aircraft_per_min": round(msgs, 3), "s_loss": round(ret - MU * msgs, 4)}
+        out[key].update(spread_stats([d for r in rows for d in r.get("news_distribution", [])]))
     return out
+
+
+def spread_stats(dists):
+    """Aggregate of news_distribution rows: mean coverage, share of events reaching 90 % / 100 %,
+    median seconds to 90 %, and drones still flying at the end that never knew."""
+    if not dists:
+        return {"news_events": 0}
+    t90 = [d["t90_s"] for d in dists if d["t90_s"] is not None]
+    return {"news_events": len(dists),
+            "coverage": round(statistics.mean(d["coverage"] for d in dists), 4),
+            "reach90_share": round(sum(d["t90_s"] is not None for d in dists) / len(dists), 4),
+            "reach100_share": round(sum(d["t100_s"] is not None for d in dists) / len(dists), 4),
+            "t90_median_s": statistics.median(t90) if t90 else None,
+            "missed_drones": sum(len(d["missed"]) for d in dists)}
 
 
 def iter_collections(root=HISTORY):
@@ -605,13 +666,21 @@ def iter_collections(root=HISTORY):
 
 def compare(root=HISTORY):
     """One line per collection and setting: how each policy version did, oldest first."""
-    lines = ["| collection | policy | note | cases | setting | runs | failed | retention | msgs/ac/min | S_loss |",
-             "|---|---|---|---:|---|---:|---:|---:|---:|---:|"]
+    lines = ["| collection | policy | note | cases | setting | runs | failed | retention | msgs/ac/min | S_loss "
+             "| coverage | reach 90% | t90 (s) | missed |",
+             "|---|---|---|---:|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|"]
+
+    def num(v, f):
+        return "" if v is None else format(v, f)
+
     for d, col in iter_collections(root):
-        for key, agg in sorted((col.get("by_setting") or {}).items()):
+        rows = sorted((col.get("by_setting") or {}).items(), key=lambda kv: tuple(float(x) for x in kv[0].split("x")))
+        for key, agg in rows:
             lines.append(f"| {d.name} | {col['provenance']['policy']['short']} | {col.get('note') or ''} | "
                          f"{len(col['settings']['cases'])} | {key} | {agg['runs']} | {agg['failed']} | "
-                         f"{agg['retention']:.3f} | {agg['messages_per_aircraft_per_min']:.2f} | {agg['s_loss']:.3f} |")
+                         f"{agg['retention']:.3f} | {agg['messages_per_aircraft_per_min']:.2f} | {agg['s_loss']:.3f} | "
+                         f"{num(agg.get('coverage'), '.3f')} | {num(agg.get('reach90_share'), '.2f')} | "
+                         f"{num(agg.get('t90_median_s'), '.0f')} | {num(agg.get('missed_drones'), 'd')} |")
     return "\n".join(lines)
 
 
@@ -670,6 +739,18 @@ def report(summaries):
             for ctx in s.get("failure_context") or []:
                 if ctx.get("evidence"):
                     lines.append(f"       {s['run']}: {ctx['cause']}: {ctx['evidence']}")
+    lines.append("")
+    lines.append("News distribution (audience = drones airborne at the event):")
+    groups = {}
+    for s in summaries:
+        groups.setdefault(f"{s['setting'][0]:g}x{s['setting'][1]:g}", []).extend(s.get("news_distribution", []))
+    for key, dists in sorted(groups.items(), key=lambda kv: tuple(float(x) for x in kv[0].split("x"))):
+        st = spread_stats(dists)
+        if st["news_events"]:
+            t90 = "never" if st["t90_median_s"] is None else f"{st['t90_median_s']:.0f} s"
+            lines.append(f"  {key:>9}: {st['news_events']} events, coverage {st['coverage']:.3f}, reach 90% "
+                         f"{st['reach90_share']:.2f}, reach 100% {st['reach100_share']:.2f}, median t90 {t90}, "
+                         f"missed {st['missed_drones']}")
     affected = [r for s in summaries for r in s["event_learning"] if r.get("affected")]
     lines.append("")
     lines.append("Event learning, affected drones only (needed = planned time it had to know by):")

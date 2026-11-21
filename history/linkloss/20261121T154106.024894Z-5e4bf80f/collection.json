@@ -1,0 +1,396 @@
+{
+ "schema": 1,
+ "collection": "20261121T154106.024894Z-5e4bf80f",
+ "started_at": "2026-11-21T15:41:06.024894+00:00",
+ "status": "complete",
+ "note": "news ON (NEWS_SENDS=3): distribution, full grid",
+ "settings": {
+  "cases": [
+   "L1:0",
+   "L1:1",
+   "L1:2",
+   "L1:3",
+   "L1:4",
+   "L2:0",
+   "L2:1",
+   "L2:2",
+   "L2:3",
+   "L2:4",
+   "L3:0",
+   "L3:1",
+   "L3:2",
+   "L3:3",
+   "L3:4",
+   "L4:0",
+   "L4:1",
+   "L4:2",
+   "L4:3",
+   "L4:4"
+  ],
+  "event_seed": null,
+  "settings": [
+   [
+    250.0,
+    50.0
+   ],
+   [
+    250.0,
+    100.0
+   ],
+   [
+    250.0,
+    200.0
+   ],
+   [
+    250.0,
+    400.0
+   ],
+   [
+    250.0,
+    800.0
+   ],
+   [
+    500.0,
+    50.0
+   ],
+   [
+    500.0,
+    100.0
+   ],
+   [
+    500.0,
+    200.0
+   ],
+   [
+    500.0,
+    400.0
+   ],
+   [
+    500.0,
+    800.0
+   ],
+   [
+    1000.0,
+    50.0
+   ],
+   [
+    1000.0,
+    100.0
+   ],
+   [
+    1000.0,
+    200.0
+   ],
+   [
+    1000.0,
+    400.0
+   ],
+   [
+    1000.0,
+    800.0
+   ],
+   [
+    2000.0,
+    50.0
+   ],
+   [
+    2000.0,
+    100.0
+   ],
+   [
+    2000.0,
+    200.0
+   ],
+   [
+    2000.0,
+    400.0
+   ],
+   [
+    2000.0,
+    800.0
+   ]
+  ],
+  "comm_seeds": 1,
+  "near_m": 200.0,
+  "workers": 10,
+  "plans": "greedy baseline"
+ },
+ "provenance": {
+  "policy": {
+   "spec": "output/linkloss-policies/policy_news3.py",
+   "sha256": "7728170fcb2a7d28d8fdf288db653a4974231a95d8e97cbaae2e71f4af77a217",
+   "short": "7728170fcb2a"
+  },
+  "kit_linkloss_sha256": "5285458f919cdfbc26f20ae23462b4f07b36610b69a469b77a9cd424ef7088a9",
+  "git": {
+   "commit": "e08a937ba3c217b621ac954793fd7150c9bb8a68",
+   "branch": "linkloss",
+   "dirty": true
+  },
+  "python": "3.10.13",
+  "platform": "macOS-26.6.2"
+ },
+ "finished_at": "2026-11-21T15:44:39.099241+00:00",
+ "by_setting": {
+  "250x50": {
+   "runs": 20,
+   "failed": 2,
+   "retention": 0.8551,
+   "messages_per_aircraft_per_min": 7.231,
+   "s_loss": 0.8407,
+   "news_events": 24,
+   "coverage": 0.4395,
+   "reach90_share": 0.0833,
+   "reach100_share": 0.0833,
+   "t90_median_s": 36.0,
+   "missed_drones": 11
+  },
+  "250x100": {
+   "runs": 20,
+   "failed": 2,
+   "retention": 0.8551,
+   "messages_per_aircraft_per_min": 7.231,
+   "s_loss": 0.8407,
+   "news_events": 24,
+   "coverage": 0.4395,
+   "reach90_share": 0.0833,
+   "reach100_share": 0.0833,
+   "t90_median_s": 36.0,
+   "missed_drones": 11
+  },
+  "250x200": {
+   "runs": 20,
+   "failed": 2,
+   "retention": 0.8551,
+   "messages_per_aircraft_per_min": 7.231,
+   "s_loss": 0.8407,
+   "news_events": 24,
+   "coverage": 0.4395,
+   "reach90_share": 0.0833,
+   "reach100_share": 0.0833,
+   "t90_median_s": 36.0,
+   "missed_drones": 11
+  },
+  "250x400": {
+   "runs": 20,
+   "failed": 2,
+   "retention": 0.8551,
+   "messages_per_aircraft_per_min": 7.231,
+   "s_loss": 0.8407,
+   "news_events": 24,
+   "coverage": 0.4395,
+   "reach90_share": 0.0833,
+   "reach100_share": 0.0833,
+   "t90_median_s": 36.0,
+   "missed_drones": 11
+  },
+  "250x800": {
+   "runs": 20,
+   "failed": 2,
+   "retention": 0.8551,
+   "messages_per_aircraft_per_min": 7.231,
+   "s_loss": 0.8407,
+   "news_events": 24,
+   "coverage": 0.4395,
+   "reach90_share": 0.0833,
+   "reach100_share": 0.0833,
+   "t90_median_s": 36.0,
+   "missed_drones": 11
+  },
+  "500x50": {
+   "runs": 20,
+   "failed": 0,
+   "retention": 0.9551,
+   "messages_per_aircraft_per_min": 8.146,
+   "s_loss": 0.9388,
+   "news_events": 24,
+   "coverage": 0.4899,
+   "reach90_share": 0.125,
+   "reach100_share": 0.125,
+   "t90_median_s": 23.0,
+   "missed_drones": 12
+  },
+  "500x100": {
+   "runs": 20,
+   "failed": 0,
+   "retention": 0.9551,
+   "messages_per_aircraft_per_min": 8.146,
+   "s_loss": 0.9388,
+   "news_events": 24,
+   "coverage": 0.4899,
+   "reach90_share": 0.125,
+   "reach100_share": 0.125,
+   "t90_median_s": 23.0,
+   "missed_drones": 12
+  },
+  "500x200": {
+   "runs": 20,
+   "failed": 0,
+   "retention": 0.9551,
+   "messages_per_aircraft_per_min": 8.146,
+   "s_loss": 0.9388,
+   "news_events": 24,
+   "coverage": 0.4899,
+   "reach90_share": 0.125,
+   "reach100_share": 0.125,
+   "t90_median_s": 23.0,
+   "missed_drones": 12
+  },
+  "500x400": {
+   "runs": 20,
+   "failed": 0,
+   "retention": 0.9551,
+   "messages_per_aircraft_per_min": 8.146,
+   "s_loss": 0.9388,
+   "news_events": 24,
+   "coverage": 0.4899,
+   "reach90_share": 0.125,
+   "reach100_share": 0.125,
+   "t90_median_s": 23.0,
+   "missed_drones": 12
+  },
+  "500x800": {
+   "runs": 20,
+   "failed": 0,
+   "retention": 0.9551,
+   "messages_per_aircraft_per_min": 8.146,
+   "s_loss": 0.9388,
+   "news_events": 24,
+   "coverage": 0.4899,
+   "reach90_share": 0.125,
+   "reach100_share": 0.125,
+   "t90_median_s": 23.0,
+   "missed_drones": 12
+  },
+  "1000x50": {
+   "runs": 20,
+   "failed": 2,
+   "retention": 0.8716,
+   "messages_per_aircraft_per_min": 7.611,
+   "s_loss": 0.8564,
+   "news_events": 24,
+   "coverage": 0.6282,
+   "reach90_share": 0.375,
+   "reach100_share": 0.2917,
+   "t90_median_s": 4.0,
+   "missed_drones": 11
+  },
+  "1000x100": {
+   "runs": 20,
+   "failed": 2,
+   "retention": 0.8716,
+   "messages_per_aircraft_per_min": 7.611,
+   "s_loss": 0.8564,
+   "news_events": 24,
+   "coverage": 0.6282,
+   "reach90_share": 0.375,
+   "reach100_share": 0.2917,
+   "t90_median_s": 4.0,
+   "missed_drones": 11
+  },
+  "1000x200": {
+   "runs": 20,
+   "failed": 2,
+   "retention": 0.8716,
+   "messages_per_aircraft_per_min": 7.611,
+   "s_loss": 0.8564,
+   "news_events": 24,
+   "coverage": 0.6282,
+   "reach90_share": 0.375,
+   "reach100_share": 0.2917,
+   "t90_median_s": 4.0,
+   "missed_drones": 11
+  },
+  "1000x400": {
+   "runs": 20,
+   "failed": 2,
+   "retention": 0.8716,
+   "messages_per_aircraft_per_min": 7.611,
+   "s_loss": 0.8564,
+   "news_events": 24,
+   "coverage": 0.6282,
+   "reach90_share": 0.375,
+   "reach100_share": 0.2917,
+   "t90_median_s": 4.0,
+   "missed_drones": 11
+  },
+  "1000x800": {
+   "runs": 20,
+   "failed": 2,
+   "retention": 0.8716,
+   "messages_per_aircraft_per_min": 7.611,
+   "s_loss": 0.8564,
+   "news_events": 24,
+   "coverage": 0.6282,
+   "reach90_share": 0.375,
+   "reach100_share": 0.2917,
+   "t90_median_s": 4.0,
+   "missed_drones": 11
+  },
+  "2000x50": {
+   "runs": 20,
+   "failed": 0,
+   "retention": 0.9551,
+   "messages_per_aircraft_per_min": 8.193,
+   "s_loss": 0.9387,
+   "news_events": 24,
+   "coverage": 0.8024,
+   "reach90_share": 0.5417,
+   "reach100_share": 0.5417,
+   "t90_median_s": 2.0,
+   "missed_drones": 6
+  },
+  "2000x100": {
+   "runs": 20,
+   "failed": 0,
+   "retention": 0.9551,
+   "messages_per_aircraft_per_min": 8.142,
+   "s_loss": 0.9388,
+   "news_events": 24,
+   "coverage": 0.8024,
+   "reach90_share": 0.5417,
+   "reach100_share": 0.5417,
+   "t90_median_s": 2.0,
+   "missed_drones": 6
+  },
+  "2000x200": {
+   "runs": 20,
+   "failed": 0,
+   "retention": 0.9551,
+   "messages_per_aircraft_per_min": 8.142,
+   "s_loss": 0.9388,
+   "news_events": 24,
+   "coverage": 0.8024,
+   "reach90_share": 0.5417,
+   "reach100_share": 0.5417,
+   "t90_median_s": 2.0,
+   "missed_drones": 6
+  },
+  "2000x400": {
+   "runs": 20,
+   "failed": 0,
+   "retention": 0.9551,
+   "messages_per_aircraft_per_min": 8.142,
+   "s_loss": 0.9388,
+   "news_events": 24,
+   "coverage": 0.8024,
+   "reach90_share": 0.5417,
+   "reach100_share": 0.5417,
+   "t90_median_s": 2.0,
+   "missed_drones": 6
+  },
+  "2000x800": {
+   "runs": 20,
+   "failed": 0,
+   "retention": 0.9551,
+   "messages_per_aircraft_per_min": 8.142,
+   "s_loss": 0.9388,
+   "news_events": 24,
+   "coverage": 0.8024,
+   "reach90_share": 0.5417,
+   "reach100_share": 0.5417,
+   "t90_median_s": 2.0,
+   "missed_drones": 6
+  }
+ }
+}
