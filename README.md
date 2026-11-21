@@ -194,6 +194,31 @@ Same-run comparisons, 17 scenarios (8 board validation, L4 seeds 9–14, L3 seed
 
 Repeat runs of the same code differ by 0.4–1% in total; in a third run the committed version scored 14027.9. Step 2's gain over step 1 comes mostly from two large wins (L4-11 +104, L4-14 +53); it won 9 cases and lost 6. Under 4 parallel workers the trip plan reaches its time cap before realisation finishes on the largest cases. Two variants scored lower in the same run: capping generation at 40% of the share (−37) and generating at one layer only (−133).
 
+#### Joint re-plan of n scouts (LNS operator `group`)
+
+Moving one scout at a time stays in a local optimum. A model of the board L4 cases re-planned scouts one by one and reached the same contact set as the planner. Exchanging contacts between two scouts raised the model value by 60–80 per case. Most of that gain came from cheaper scout trips, not extra coverage. The `group` operator (`GROUP_SIZES`, `GROUP_SHARE` = 20% of LNS steps, alongside `trip`) works like this:
+
+- It picks n scouts: one is chosen like the `trip` move, and the rest are neighbours weighted by tour/base distance.
+- It pools their contacts with up to `GROUP_POOL` unserved positive-net contacts within 2 km of their tours.
+- It removes those tours and the strikes they confirm (`strip_scouts`).
+- It runs the label search for each scout over the pool, keeping the top 40 trips plus cover trips and the current tour as an extra order.
+- `best_disjoint` picks the best set of disjoint trips with a depth-first search and an upper-bound prune. The move goes ahead only if that set beats the estimated value of the current trips.
+- It realises the visits in observation-time order through `realise_visits`, taking at most 0.8 s per move. The normal LNS repair and acceptance follow.
+
+Counters in the `lns` block: `group_tried`, `group_realised`, `group_accepted`, `group_improvements`, `group_gain`, `group_label_s` and `group_sizes`.
+
+Same 17 scenarios, 4 versions per run, 4 workers, default 45 s. Base is master at de78902. All 136 plans were valid.
+
+| Run | base | n = 2 | n = 3 | n random 2–4 |
+|---|---:|---:|---:|---:|
+| run 1 total | 14203.3 | 14431.3 | 14367.1 | 14423.9 |
+| run 2 total | 14351.8 | 14337.1 | 14343.9 | 14368.6 |
+| sum of both | 28555.1 | 28768.4 | 28711.0 | 28792.5 |
+| L4 subtotal, sum | 20785.4 | 20975.5 | 20925.0 | 20987.4 |
+| board-8 subtotal, sum | 9859.7 | 9870.7 | 9879.2 | 9938.9 |
+
+Random n in 2–4 is the default. Its gain over base is +237 summed (+0.8%), but it comes almost entirely from run 1: run 2 is a tie within the 0.4–1% run-to-run noise. Against base, mix won 11 and lost 5 in run 1, and won 8 and lost 8 in run 2. Base itself moved by +149 between the runs. Per-case swings of ±40–60 on L4 go both ways; for example, L4-14 was +102 in run 1 and −64 in run 2. Over the two runs the group move improved the best plan 85 times (out of ~3500 tries). About 70% of tries pass the estimate gate and are realised, and LNS iterations drop by ~12% because a group move costs more than a `trip` move.
+
 ### Local benchmark results
 
 Measured on this machine with five-second search budgets. These are sampled scenarios, not a guarantee of performance on unseen inputs.
