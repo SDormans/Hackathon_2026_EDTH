@@ -259,7 +259,7 @@ class SearchTests(unittest.TestCase):
     def test_scout_cost_selects_insertion_ranking(self):
         sc = Scenario.from_dict(generate('L4', 0))
         with self.assertRaises(ValueError):
-            Search(sc, scout_cost='energy')
+            Search(sc, scout_cost='fuel')
         search = Search(sc, seconds=4)
         search.warm_start()
         state = search.archive[0]
@@ -267,11 +267,13 @@ class SearchTests(unittest.TestCase):
         p.tasks = state.tasks
         contact = next(c for c in sc.contacts if c.cls in ('hostile', 'unknown')
                        and c.window is not None and c.id not in state.served)
-        for cost, key in (('time', 0), ('distance', 1)):
+        for cost in search_planner.SCOUT_COSTS:
             search.scout_cost = cost
             ranked = search.insertion_costs(p, contact)
             self.assertGreater(len(ranked), 1)
-            self.assertEqual([r[key] for r in ranked], sorted(r[key] for r in ranked))
+            self.assertEqual([r[0] for r in ranked], sorted(r[0] for r in ranked))
+            self.assertEqual([r[0] for r in ranked],
+                             [{'time': r[1], 'distance': r[2]}.get(cost, r[0]) for r in ranked])
 
     def test_remove_drops_served_contacts_and_stays_valid(self):
         sc = Scenario.from_dict(generate('L3', 1))

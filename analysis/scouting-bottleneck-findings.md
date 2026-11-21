@@ -165,3 +165,45 @@ Observations and limits:
 - Runs shared 8 cores with 7 other batches; results under `--workers 1` on an idle machine may differ. The insertion version varied by at most 19 points between rounds; single cases vary more.
 - `lns_share` was tuned on the same seeds it was measured on; it has not been confirmed on unseen seeds or on L1–L3.
 
+## 7. Test: why time ranking loses to distance
+
+Hypothesis from section 6: time ranking counts waiting for a window as a cost, while the score charges mostly for distance flown.
+
+**Energy model.** In `fleetkit.energy`, a leg costs (p0 + k_v·v²)·duration; `_scout_route` does not hover before a window but stretches the leg, so waiting costs about p0 per second. For L4 scouts p0 = 61.9 W and k_v = 0.215; at the best-range cruise speed (16.97 m/s) a scout uses 123.8 W, 2.03 Wh/km. Waiting therefore costs about half as much per second as flying, not nothing. With λ_e = 0.5 points/Wh a kilometre costs about 1 point.
+
+**Direct energy effect.** For 135 unserved contacts with at least two feasible positions, after the warm start of L4 seeds 0–2 (`output/rank_stats.py`, not committed), the position chosen by time ranking used on average 1.6 Wh (about 0.8 points) more than the lowest-energy position, and distance ranking 0.7 Wh more. The direct energy difference is far too small to explain the score gap.
+
+**Ranking variants.** `--scout-cost` selects the cost used by both insertion ranking and regret ordering: `time` (airborne time with waits), `flight` (flying time without waits), `energy` (estimated Wh from the model above, including climb) and `distance`. L4 seeds 0–9, 55 s, LNS share 0.5, two rounds of 8 concurrent batches on 8 cores:
+
+| Ranking | Round 1 | Round 2 | Mean | vs time |
+|---|---|---|---|---|
+| `time` | 9,794.59 | 9,828.49 | 9,811.5 | — |
+| `flight` | 9,896.50 | 9,913.57 | 9,905.0 | +1.0% |
+| `energy` | 9,978.87 | 9,987.53 | 9,983.2 | +1.7% |
+| `distance` | 10,182.87 | 10,195.67 | 10,189.3 | +3.8% |
+
+Mean score per case:
+
+| Case | time | flight | energy | distance |
+|---|---|---|---|---|
+| L4:0 | 1149.2 | 1165.7 | 1150.1 | 1192.9 |
+| L4:1 | 921.4 | 917.2 | 1026.6 | 978.4 |
+| L4:2 | 780.0 | 722.5 | 846.2 | 825.2 |
+| L4:3 | 988.7 | 1077.2 | 1070.6 | 1079.9 |
+| L4:4 | 972.0 | 963.8 | 963.0 | 1007.7 |
+| L4:5 | 1212.6 | 1208.3 | 1110.6 | 1162.5 |
+| L4:6 | 785.2 | 797.8 | 838.2 | 874.0 |
+| L4:7 | 978.3 | 973.4 | 909.3 | 932.4 |
+| L4:8 | 1176.6 | 1210.1 | 1266.9 | 1302.3 |
+| L4:9 | 847.7 | 869.0 | 801.6 | 833.9 |
+
+All 80 plans were valid, with no timeouts. The same variant differed by at most 34 points between rounds; single cases vary much more. `distance` was higher than `time` on 7 of 10 cases (lower on L4:5, L4:7, L4:9).
+
+**Conclusion.** The hypothesis is only partly supported:
+
+- Dropping the waiting term (`time` → `flight`) gained 1.0%, so counting waits does cost a little.
+- The larger gap (`flight` → `distance`, +2.9%) remains without any waiting term. `flight` differs from `distance` only in dividing by each scout's cruise speed (11 of 15 scouts cruise at the 16.97 m/s best-range speed, 4 slower at 14.3–16.9 m/s) and in adding climb, descent and dwell. Which of these causes the gap was not isolated; the top choice was an idle scout equally often (44 of 135 contacts) under all four rankings.
+- Ranking by estimated energy, the cost closest to the score, was 2.0% below `distance`.
+
+Since the direct energy differences are about 1 point per insertion, the ranking matters mainly through its effect on later insertions, not through energy. A likely reason, not tested: minimum added distance keeps each tour spatially compact and leaves more slack for later contacts. These results come from the same 10 seeds; other levels and unseen seeds were not run.
+

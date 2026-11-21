@@ -27,7 +27,7 @@ except ModuleNotFoundError:
         sys.path.insert(0, str(kits[0].parent.parent))
 
 from fleetkit.model import Scenario, load_json, save_json
-from search_planner import Search
+from search_planner import SCOUT_COSTS, Search
 
 
 def main():
@@ -40,7 +40,7 @@ def main():
     parser.add_argument("--beam-width", type=int, default=6)
     parser.add_argument("--lns-share", type=float, default=0.5,
                         help="share of the search time for large neighbourhood search, 0..0.9")
-    parser.add_argument("--scout-cost", choices=("time", "distance"), default="time",
+    parser.add_argument("--scout-cost", choices=SCOUT_COSTS, default="time",
                         help="primary cost for ranking scout insertion positions")
     parser.add_argument("--artifacts", type=Path,
                         help="optional directory for ranked plans, tree.json and interactive tree.html")

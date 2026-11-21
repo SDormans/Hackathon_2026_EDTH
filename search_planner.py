@@ -243,6 +243,11 @@ class WarmPlanner(_Planner):
         return super()._add_observation(*args)
 
 
+# Ranking cost for scout insertions: airborne time including waits, straight-line
+# distance, flying time excluding waits, or estimated energy (fleetkit.energy model).
+SCOUT_COSTS = ("time", "distance", "flight", "energy")
+
+
 class Search:
     def __init__(self, scenario, seconds=55.0, top_n=5, beam_width=6, start=None, lns_share=0.5,
                  scout_cost="time"):
@@ -250,8 +255,8 @@ class Search:
             raise ValueError("seconds must be nonnegative; top_n and beam_width must be 1..100")
         if not 0 <= lns_share <= 0.9:
             raise ValueError("lns_share must be 0..0.9")
-        if scout_cost not in ("time", "distance"):
-            raise ValueError("scout_cost must be time or distance")
+        if scout_cost not in SCOUT_COSTS:
+            raise ValueError("scout_cost must be one of " + ", ".join(SCOUT_COSTS))
         self.lns_share = lns_share
         # Primary key for ranking scout insertion positions; the other breaks ties.
         self.scout_cost = scout_cost
@@ -308,24 +313,21 @@ class Search:
                 p.state = self.record(state, p.state, {"kind": "greedy", "contact": c.id}, depth)
 
     def insertion_costs(self, p, contact):
-        """(added flight time, added distance, scout id, tour position, scout) for every
-        position of every scout tour that passes the time-window bound, cheapest first."""
+        """(added scout_cost, added airborne time, added distance, scout id, tour position,
+        scout) for every position of every scout tour that passes the time-window bound,
+        cheapest first."""
         ranked = []
         for a in p._scout_candidates(contact, limit=len(p.tasks)):
-            for k, seconds, metres in self.feasible_positions(a, p.tasks[a.id], contact):
-                ranked.append((seconds, metres, a.id, k, a))
-        if self.scout_cost == "distance":
-            ranked.sort(key=lambda r: (r[1], r[0], r[2], r[3]))
-        else:
-            ranked.sort(key=lambda r: r[:4])
+            for k, costs in self.feasible_positions(a, p.tasks[a.id], contact):
+                ranked.append((costs[self.scout_cost], costs["time"], costs["distance"], a.id, k, a))
+        ranked.sort(key=lambda r: r[:5])
         return ranked
 
     def feasible_positions(self, scout, tasks, contact):
         """Tour positions where the contact could still fit, by a lower bound on timing:
         straight legs at the lowest layer, departing at 0, the observation point within
         OBS_OFFSET_M of the contact. A rejected position cannot pass _scout_route and R1.
-        Returns (position, added flight time, added distance); time includes hovering while
-        waiting for windows, which costs energy like flying."""
+        Returns (position, {cost name: added cost}) for each name in SCOUT_COSTS."""
         dwell, horizon = self.sc.rules.obs_dwell_s, self.sc.horizon_s
         speed = min(SPEED_FACTOR * scout.v_h_mps, best_range_speed(scout.power))
         z = min(SCOUT_LAYERS)
@@ -345,7 +347,7 @@ class Search:
             latest[i] = nxt = min(tasks[i]["window"][1], nxt - hdist(points[i], after) / speed) - dwell
         lo, hi = contact.window
         stops = [(t["point"], t["window"]) for t in tasks]
-        before_s = self.tour_seconds(speed, climb, descent, home, stops)
+        base = self.tour_costs(scout, speed, climb, descent, z, home, stops)
         out = []
         for k in range(len(tasks) + 1):
             before = points[k-1] if k else home
@@ -360,24 +362,33 @@ class Search:
                     continue
             elif arrive + descent > horizon + EPS:
                 continue
-            seconds = self.tour_seconds(speed, climb, descent, home,
-                                        stops[:k] + [(pos, contact.window)] + stops[k:]) - before_s
-            out.append((k, seconds, hdist(before, pos) + hdist(pos, after) - hdist(before, after)))
+            costs = self.tour_costs(scout, speed, climb, descent, z, home,
+                                    stops[:k] + [(pos, contact.window)] + stops[k:])
+            out.append((k, {name: costs[name] - base[name] for name in SCOUT_COSTS}))
         return out
 
-    def tour_seconds(self, speed, climb, descent, home, stops):
-        """Estimated airborne time of a tour on straight legs: takeoff is delayed so the
-        first window is not waited for on the ground."""
+    def tour_costs(self, scout, speed, climb, descent, z, home, stops):
+        """Estimated costs of a scout tour on straight legs (see SCOUT_COSTS). Takeoff is
+        delayed so the first window is not waited for on the ground; later waits stretch
+        the leg as in _scout_route, which costs p0 per second plus k_v v^2 for the slower
+        cruise (fleetkit.energy.leg_energy_wh)."""
         if not stops:
-            return 0.0
-        dwell = self.sc.rules.obs_dwell_s
-        travel = climb + hdist(home, stops[0][0]) / speed
-        t = max(travel, stops[0][1][0])
-        depart = t - travel
-        t += dwell
-        for (a, _), (b, window) in zip(stops, stops[1:]):
-            t = max(t + hdist(a, b) / speed, window[0]) + dwell
-        return t + hdist(stops[-1][0], home) / speed + descent - depart
+            return dict.fromkeys(SCOUT_COSTS, 0.0)
+        power, dwell = scout.power, self.sc.rules.obs_dwell_s
+        legs = list(zip([home] + [a for a, _ in stops], [b for b, _ in stops] + [home]))
+        lengths = [hdist(a, b) for a, b in legs]
+        durations = [length / speed for length in lengths]
+        t = durations[0] + dwell
+        for i, (_, window) in enumerate(stops[1:], 1):
+            durations[i] = max(durations[i], window[0] - t)
+            t += durations[i] + dwell
+        joules = (power.p0_w * (sum(durations) + dwell * len(stops) + climb + descent)
+                  + power.k_v * sum(length * length / d for length, d in zip(lengths, durations) if d > 0))
+        flying = sum(lengths) / speed + climb + descent
+        return {"time": t + durations[-1] + climb + descent,
+                "distance": sum(lengths),
+                "flight": flying + dwell * len(stops),
+                "energy": joules / 3600.0 + power.e_climb_wh_per_m * z}
 
     def observation(self, p, scout, contact, z, angle, shift, k):
         """baseline._Planner._add_observation, inserting the task at tour position k."""
@@ -537,11 +548,11 @@ class Search:
         return state
 
     def regret(self, p, contact):
-        """Regret-2: extra flight time if the cheapest scout is unavailable; infinite with
+        """Regret-2: extra scout_cost if the cheapest scout is unavailable; infinite with
         one feasible scout, -1 with none (tried last)."""
         best = {}
-        for seconds, _, aid, _, _ in self.insertion_costs(p, contact):
-            best.setdefault(aid, seconds)
+        for cost, _, _, aid, _, _ in self.insertion_costs(p, contact):
+            best.setdefault(aid, cost)
         costs = sorted(best.values())
         if not costs:
             return -1.0
