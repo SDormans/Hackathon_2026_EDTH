@@ -82,33 +82,44 @@ class ExactnessTests(unittest.TestCase):
             self.assertIsNone(actual)
         return official.valid
 
-    def tours(self, orders):
-        by_cid = {t["cid"]: t for t in self.tasks}
+    def tours(self, orders, sid=None):
+        sid = sid or self.sid
+        tasks = self.best.tasks[sid]
+        scout, z = self.sc.aircraft_by_id()[sid], max(w["z"] for w in self.best.routes[sid])
+        by_cid = {t["cid"]: t for t in tasks}
         for order in orders:
-            tour = scout_tour(self.sc, self.scout, [by_cid[c] for c in order], self.z)
+            tour = scout_tour(self.sc, scout, [by_cid[c] for c in order], z)
             if tour is not None:
                 yield copy.deepcopy(tour)
 
-    def removal_orders(self, keeps_prefix):
+    def removal_orders(self, sid, keeps_prefix):
         """Remove each visit and re-add it: insertion positions keep the other visits'
         order (keeps_prefix True), reordered tours do not."""
         contacts = self.sc.contact_by_id()
-        for task in self.tasks:
-            rest = [t for t in self.tasks if t is not task]
-            for order, keeps in Search.tour_orders(self.scout, rest, contacts[task["cid"]], True):
+        scout, tasks = self.sc.aircraft_by_id()[sid], self.best.tasks[sid]
+        for task in tasks:
+            rest = [t for t in tasks if t is not task]
+            for order, keeps in Search.tour_orders(scout, rest, contacts[task["cid"]], True):
                 if keeps == keeps_prefix:
                     yield order
+
+    def check_removal_moves(self, keeps_prefix):
+        verdicts = []
+        for sid in self.best.tasks:
+            if self.sc.aircraft_by_id()[sid].type == "scout" and len(self.best.tasks[sid]) >= 2:
+                for tour in self.tours(self.removal_orders(sid, keeps_prefix), sid):
+                    verdicts.append(self.agree(tour, sid=sid))
+        self.assertTrue(verdicts)
 
     def check_moves(self, orders):
         verdicts = [self.agree(tour) for tour in self.tours(orders)]
         self.assertTrue(verdicts)
-        return verdicts
 
     def test_insertion_moves_agree(self):
-        self.check_moves(self.removal_orders(True))
+        self.check_removal_moves(True)
 
     def test_reorder_moves_agree(self):
-        self.check_moves(self.removal_orders(False))
+        self.check_removal_moves(False)
 
     def test_two_opt_moves_agree(self):
         cids = [t["cid"] for t in self.tasks]
