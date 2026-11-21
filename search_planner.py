@@ -1280,7 +1280,7 @@ class Search:
                     "trip_gain": 0.0, "trip_label_s": 0.0,
                     "group_tried": 0, "group_realised": 0, "group_accepted": 0,
                     "group_improvements": 0, "group_gain": 0.0, "group_label_s": 0.0,
-                    "group_sizes": {}}
+                    "group_sizes": {}, "ops": {}}
         self._trip_cache = {}
         self.trip_stats = {}
         self.lns_share = lns_share
@@ -2200,12 +2200,16 @@ class Search:
                 self.checker.check_time()
             if chosen_child is not None:
                 partial = chosen_child
+        tally = self.lns["ops"].setdefault(op, {"tried": 0, "accepted": 0, "improvements": 0,
+                                                "gain": 0.0})
+        tally["tried"] += 1
         delta = partial.score - current.score
         span = max(1e-6, self.stop - st["begin"])
         heat = st["temperature"] * max(0.0, self.stop - time.monotonic()) / span
         reward = 0.0
         if delta > 1e-9 or ((removed or op in ("trip", "group")) and heat > 0 and rng.random() < math.exp(delta / heat)):
             self.lns["accepted"] += 1
+            tally["accepted"] += 1
             if op in ("trip", "group"):
                 self.lns[op + "_accepted"] += 1
             reward = 1.0 if delta > 1e-9 else 0.3
@@ -2215,6 +2219,8 @@ class Search:
             if current.score > best.score + 1e-9:
                 self.lns["improvements"] += 1
                 self.lns["gain"] += current.score - best.score
+                tally["improvements"] += 1
+                tally["gain"] += current.score - best.score
                 if op in ("trip", "group"):
                     self.lns[op + "_improvements"] += 1
                     self.lns[op + "_gain"] += current.score - best.score
