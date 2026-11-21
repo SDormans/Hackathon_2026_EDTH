@@ -62,33 +62,34 @@ def esc(x):
     return html.escape(str(x))
 
 
-def build(main, ablation, out):
-    base, new = main["policies"][:2]
+LABELS = {"policy.py": "policy.py (news forwarding)", "policy_news_off.py": "policy.py, news off",
+          "policy_v2.py": "policy_v2.py"}
+COLORS = ["var(--base)", "var(--alt)", "var(--accent)", "var(--muted)"]
+
+
+def build(main, ablation, out, base=None, new=None):
+    pols = main["policies"]
+    base = base or pols[0]
+    new = new or pols[-1]
     rows = main["rows"]
     settings = [tuple(s) for s in main["settings"]]
     cases = sorted({r["case"] for r in rows})
 
     # ---------------------------------------------------------------- headline table
-    head_rows = []
-    for s in settings:
-        for p in (base, new):
-            m = summarise(rows, p, s)
-            head_rows.append((s, p, m))
-
     def headline_table():
         out_rows = []
         for s in settings:
             b = summarise(rows, base, s)
-            n = summarise(rows, new, s)
-            for p, m in ((base, b), (new, n)):
+            for i, p in enumerate(pols):
+                m = summarise(rows, p, s)
                 is_new = p == new
                 delta = ""
-                if is_new:
+                if p != base:
                     d = m["s_loss"] - b["s_loss"]
                     delta = f'<span class="delta {"up" if d > 0 else "down" if d < 0 else ""}">{d:+.3f}</span>'
                 out_rows.append(
-                    f'<tr class="{"new" if is_new else ""}"><td>{esc(fmt_setting(s)) if not is_new else ""}</td>'
-                    f'<td><code>{esc(p)}</code></td>'
+                    f'<tr class="{"new" if is_new else ""}"><td>{esc(fmt_setting(s)) if i == 0 else ""}</td>'
+                    f'<td>{esc(LABELS.get(p, p))}</td>'
                     f'<td class="num strong">{m["s_loss"]:.3f} {delta}</td>'
                     f'<td class="num">{m["ret"]:.3f}</td>'
                     f'<td class="num">{m["fails"]}/{m["n"]}</td>'
@@ -102,7 +103,7 @@ def build(main, ablation, out):
     for s in settings:
         for lv in levels:
             vals = {}
-            for p in (base, new):
+            for p in pols:
                 sel = [r for r in rows if r["policy"] == p and r["setting"] == list(s) and r["case"].startswith(lv + "-")]
                 vals[p] = (sum(r["ret"] for r in sel) / len(sel), sum(bool(r["failed"]) for r in sel), len(sel))
             per_level.append((s, lv, vals))
@@ -112,7 +113,8 @@ def build(main, ablation, out):
         w, h, left, bottom, top = 520, 230, 44, 34, 14
         plot_h = h - bottom - top
         group_w = (w - left - 10) / len(data)
-        bar_w = min(34, group_w / 3)
+        k = len(pols)
+        bar_w = min(30, (group_w - 12) / k - 4)
         parts = []
         for v in (0, 0.25, 0.5, 0.75, 1.0):
             y = top + plot_h * (1 - v)
@@ -120,13 +122,12 @@ def build(main, ablation, out):
                          f'<text x="{left - 6}" y="{y + 4:.1f}" class="tick" text-anchor="end">{v:.2f}</text>')
         for i, (lv, vals) in enumerate(data):
             cx = left + group_w * (i + 0.5)
-            for j, p in enumerate((base, new)):
+            for j, p in enumerate(pols):
                 ret, fails, n = vals[p]
-                x = cx - bar_w - 2 + j * (bar_w + 4)
+                x = cx - (k * bar_w + (k - 1) * 4) / 2 + j * (bar_w + 4)
                 bh = plot_h * ret
                 y = top + plot_h - bh
-                cls = "bar-base" if j == 0 else "bar-new"
-                parts.append(f'<rect x="{x:.1f}" y="{y:.1f}" width="{bar_w:.1f}" height="{max(bh, 0.5):.1f}" rx="2" class="{cls}">'
+                parts.append(f'<rect x="{x:.1f}" y="{y:.1f}" width="{bar_w:.1f}" height="{max(bh, 0.5):.1f}" rx="2" style="fill:{COLORS[j % len(COLORS)]}">'
                              f'<title>{esc(lv)} {esc(p)}: retention {ret:.3f}, {fails}/{n} failed</title></rect>')
                 parts.append(f'<text x="{x + bar_w / 2:.1f}" y="{y - 4:.1f}" class="val" text-anchor="middle">{ret:.2f}</text>')
             parts.append(f'<text x="{cx:.1f}" y="{h - bottom + 18:.1f}" class="lvl" text-anchor="middle">{esc(lv)}</text>')
@@ -155,7 +156,7 @@ def build(main, ablation, out):
             if rn["failed"] and not rb["failed"]:
                 who = "v2 fails: "
             elif rb["failed"] and not rn["failed"]:
-                who = "v1 failed: "
+                who = "policy.py failed: "
             elif rb["failed"] and rn["failed"]:
                 who = "both fail: "
             reason = f'{who}{why[0][:110]}' if why else "valid in both, value changed"
@@ -172,9 +173,9 @@ def build(main, ablation, out):
     abl_html = ""
     if ablation:
         ab_rows = ablation["rows"]
-        pols = ablation["policies"]
+        ab_pols = ablation["policies"]
         ab_settings = [tuple(s) for s in ablation["settings"]]
-        ref = pols[0]
+        ref = ab_pols[0]
         labels = {
             "v2_all.py": "v2, all changes on",
             "no_zone.py": "without: scouts finish before zone",
@@ -189,7 +190,7 @@ def build(main, ablation, out):
         cells = []
         hdr = "".join(f'<th class="num" colspan="2">{esc(fmt_setting(s))}</th>' for s in ab_settings)
         sub = "".join('<th class="num">S_loss</th><th class="num">failed</th>' for _ in ab_settings)
-        for p in pols:
+        for p in ab_pols:
             tds = []
             for s in ab_settings:
                 m = summarise(ab_rows, p, s)
@@ -201,17 +202,18 @@ def build(main, ablation, out):
         abl_html = f"""
 <section>
   <h2>Which change does what</h2>
-  <p class="lede">Each row turns one change off (or the ghost option on) and reruns the same {len({r['case'] for r in ab_rows})} scenarios and communication seeds. A negative difference means v2 does better with that change in place.</p>
+  <p class="lede">Each row turns one change off and reruns the same {len({r['case'] for r in ab_rows})} scenarios. A negative difference means v2 does better with that change in place. Measured earlier with {ablation['comm_seeds']} communication seeds at {esc(', '.join(fmt_setting(s) for s in ab_settings))}: differences of one or two failed runs are within the run-to-run noise.</p>
   <div class="scroll"><table>
     <thead><tr><th>Variant</th>{hdr}</tr><tr><th></th>{sub}</tr></thead>
     <tbody>{''.join(cells)}</tbody>
   </table></div>
 </section>"""
 
-    lead = settings[0]
+    lead = next((s for s in settings if s[0] == 1000), settings[0])
     bl, nl = summarise(rows, base, lead), summarise(rows, new, lead)
-    tail = settings[-1]
+    tail = min(settings)
     bt, nt = summarise(rows, base, tail), summarise(rows, new, tail)
+    legend_html = "".join(f'<span><i style="background:{COLORS[j % len(COLORS)]}"></i>{esc(LABELS.get(p, p))}</span>' for j, p in enumerate(pols))
     changes_html = "".join(f"<li><h3>{esc(t)}</h3><p>{esc(d)}</p></li>" for t, d in CHANGES)
     paired_html = "".join(
         f'<div class="pair"><div class="pair-set">{esc(fmt_setting(s))}</div>'
@@ -228,17 +230,17 @@ def build(main, ablation, out):
 /* Layout: one reading column; tables scroll on their own; summary before detail. */
 :root {{
   --bg: #f6f7f9; --panel: #ffffff; --fg: #17202b; --muted: #5b6676; --line: #dde2e8;
-  --accent: #2557c7; --base: #9aa6b6; --up: #157a4a; --down: #b3261e; --same: #c9d0d9;
+  --accent: #2557c7; --base: #9aa6b6; --alt: #c9853a; --up: #157a4a; --down: #b3261e; --same: #c9d0d9;
   --display: "Space Grotesk", "Segoe UI", system-ui, sans-serif;
   --body: "IBM Plex Sans", "Segoe UI", system-ui, sans-serif;
   --mono: "IBM Plex Mono", ui-monospace, Consolas, monospace;
 }}
 @media (prefers-color-scheme: dark) {{ :root:not([data-theme="light"]) {{
   --bg: #0f141b; --panel: #161d27; --fg: #e4e9f0; --muted: #98a3b3; --line: #2a3442;
-  --accent: #7fa6ff; --base: #5d6878; --up: #4cc38a; --down: #ff7b72; --same: #3a4555; color-scheme: dark }} }}
+  --accent: #7fa6ff; --base: #5d6878; --alt: #d9a05b; --up: #4cc38a; --down: #ff7b72; --same: #3a4555; color-scheme: dark }} }}
 :root[data-theme="dark"] {{
   --bg: #0f141b; --panel: #161d27; --fg: #e4e9f0; --muted: #98a3b3; --line: #2a3442;
-  --accent: #7fa6ff; --base: #5d6878; --up: #4cc38a; --down: #ff7b72; --same: #3a4555; color-scheme: dark }}
+  --accent: #7fa6ff; --base: #5d6878; --alt: #d9a05b; --up: #4cc38a; --down: #ff7b72; --same: #3a4555; color-scheme: dark }}
 body {{ background: var(--bg); color: var(--fg); font-family: var(--body); font-size: 15px; line-height: 1.55; }}
 main {{ max-width: 980px; margin: 0 auto; padding-block: 40px 64px;
   padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px));
@@ -302,8 +304,8 @@ details .scroll {{ border: 0; border-top: 1px solid var(--line); border-radius: 
 <main>
   <header>
     <div class="eyebrow">Link-loss challenge · policy comparison</div>
-    <h1>policy_v2.py against policy.py</h1>
-    <p class="lede">Same scenarios, events and communication seeds for both policies, measured the way the README table is: greedy plans, {len(cases)} unseen scenarios ({esc(main['levels'].replace(',', ', '))}, seeds {esc(main['seeds'])}), {main['comm_seeds']} communication seeds each.</p>
+    <h1>policy_v2.py against the current policy.py</h1>
+    <p class="lede">The current <code>policy.py</code> forwards news of dangers by default (store and forward). It is shown with news on and off, next to v2, which shares no news. Same scenarios, events and communication seeds for every policy: greedy plans, {len(cases)} unseen scenarios ({esc(main['levels'].replace(',', ', '))}, seeds {esc(main['seeds'])}), {main['comm_seeds']} communication seeds each.</p>
   </header>
 
   <section>
@@ -326,7 +328,7 @@ details .scroll {{ border: 0; border-top: 1px solid var(--line); border-radius: 
 
   <section>
     <h2>Retention by level</h2>
-    <div class="legend"><span><i style="background:var(--base)"></i>policy.py</span><span><i style="background:var(--accent)"></i>policy_v2.py</span></div>
+    <div class="legend">{legend_html}</div>
     <div class="charts">{charts_html}</div>
   </section>
 
@@ -356,7 +358,7 @@ details .scroll {{ border: 0; border-top: 1px solid var(--line); border-radius: 
 
   <section class="method">
     <h2>How this was measured</h2>
-    <p><code>analysis/compare_policies.py policy.py policy_v2.py --levels {esc(main['levels'])} --seeds {esc(main['seeds'])} --settings {esc(','.join(f'{s[0]:g}x{s[1]:g}' for s in settings))} --comm-seeds {main['comm_seeds']}</code>, {main['workers']} workers, {main['seconds']:.0f} s.</p>
+    <p><code>analysis/compare_policies.py {esc(' '.join(pols))} --levels {esc(main['levels'])} --seeds {esc(main['seeds'])} --settings {esc(','.join(f'{s[0]:g}x{s[1]:g}' for s in settings))} --comm-seeds {main['comm_seeds']}</code>, {main['workers']} workers, {main['seconds']:.0f} s.</p>
     <p>Plans are the kit's greedy baseline and events use seed + 1, as in <code>handin/check_policy.py</code>. These are sampled scenarios: they show measured gains and losses on these seeds, not a guarantee on the organisers' reference plans. Separation failures remain, mostly between aircraft that leave the plan near the base or at 250 m range.</p>
   </section>
 </main>
@@ -370,11 +372,13 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("main")
     ap.add_argument("--ablation")
+    ap.add_argument("--base", help="baseline policy name (default: the first)")
+    ap.add_argument("--new", help="policy compared run by run (default: the last)")
     ap.add_argument("-o", "--output", default="output/linkloss_v2/policy_v2_comparison.html")
     a = ap.parse_args()
     main_data = json.loads(Path(a.main).read_text())
     abl = json.loads(Path(a.ablation).read_text()) if a.ablation else None
-    build(main_data, abl, a.output)
+    build(main_data, abl, a.output, a.base, a.new)
 
 
 if __name__ == "__main__":
