@@ -1,0 +1,31 @@
+Benchmark: 12 cases, 1 worker(s), 45s search / 60s process limit
+Report: output/benchmarks/l14-nick-45s/report.html
+ Done  Scenario      Greedy        Ours        Gain     Gain %   Our s  Greedy / our status
+  1/12  L1:6           61.95       65.07       +3.12     +5.0%    2.47  ok / ok
+  2/12  L1:7          168.82      168.94       +0.12     +0.1%    2.22  ok / ok
+  3/12  L1:8           69.01       77.03       +8.02    +11.6%    1.83  ok / ok
+  4/12  L2:6          157.68      242.60      +84.92    +53.9%    6.26  ok / ok
+  5/12  L2:7          266.23      276.76      +10.52     +4.0%    3.60  ok / ok
+  6/12  L2:8          349.47      372.79      +23.32     +6.7%    6.57  ok / ok
+  7/12  L3:6          347.61      386.37      +38.76    +11.1%   30.18  ok / ok
+  8/12  L3:7          381.36      532.26     +150.91    +39.6%   41.54  ok / ok
+  9/12  L3:8          211.02      271.83      +60.82    +28.8%   45.07  ok / ok
+ 10/12  L4:6          314.70      524.21     +209.50    +66.6%   41.56  ok / ok
+ 11/12  L4:7          389.54      661.51     +271.97    +69.8%   45.07  ok / ok
+ 12/12  L4:8          533.71      898.51     +364.80    +68.4%   43.19  ok / ok
+
+ Score summary (sum of raw scores)
+ TOTAL greedy    3251.09  ours    4477.87  gain   +1226.78 (+37.7%)  W/T/L 12/0/0  valid 12/12
+ L1    greedy     299.78  ours     311.04  gain     +11.26 (+3.8%)  W/T/L 3/0/0  valid 3/3
+ L2    greedy     773.38  ours     892.15  gain    +118.76 (+15.4%)  W/T/L 3/0/0  valid 3/3
+ L3    greedy     939.99  ours    1190.47  gain    +250.48 (+26.6%)  W/T/L 3/0/0  valid 3/3
+ L4    greedy    1237.95  ours    2084.22  gain    +846.27 (+68.4%)  W/T/L 3/0/0  valid 3/3
+
+ Unserved contacts in our plans (count, points lost)
+ TOTAL collateral_ban 56 (3916), outranked 45 (2393), scout_route 45 (2237), scout_rule:R1 16 (820), no_team 3 (163), scout_rule:R3 1 (61), strike_rule:R9 1 (57)
+ L1    outranked 2 (137), collateral_ban 1 (80), scout_route 1 (25)
+ L2    outranked 2 (151), collateral_ban 2 (89), no_team 1 (67)
+ L3    collateral_ban 10 (710), no_team 2 (96), outranked 1 (65), strike_rule:R9 1 (57), scout_route 1 (50)
+ L4    collateral_ban 43 (3037), scout_route 43 (2162), outranked 40 (2040), scout_rule:R1 16 (820), scout_rule:R3 1 (61)
+ Failures: ours 0, greedy 0, setup 0
+Report: output/benchmarks/l14-nick-45s/report.html

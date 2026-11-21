@@ -1,0 +1,21 @@
+{
+ "seconds": 45.0,
+ "timeout": 60,
+ "workers": 1,
+ "cases": [
+  "L1:6",
+  "L1:7",
+  "L1:8",
+  "L2:6",
+  "L2:7",
+  "L2:8",
+  "L3:6",
+  "L3:7",
+  "L3:8",
+  "L4:6",
+  "L4:7",
+  "L4:8"
+ ],
+ "planner": "analysis/planner_alns.py",
+ "started_utc": "2026-11-21T07:59:14.172636+00:00"
+}
