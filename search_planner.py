@@ -15,7 +15,7 @@ from fleetkit import baseline
 from fleetkit.baseline import (_Planner, _effector_route, _scout_route, EFFECTOR_LAYERS,
                                SCOUT_LAYERS, SPEED_FACTOR)
 from fleetkit.energy import best_range_speed, route_energy_wh
-from fleetkit.geometry import EPS, hdist
+from fleetkit.geometry import EPS, hdist, segment_enters_cylinder
 from fleetkit.model import HOSTILE, SCOUT, UNKNOWN, parse_plan
 from fleetkit.scorer import evaluate
 from fleetkit import validator as rules
@@ -64,6 +64,82 @@ OBS_MARGIN_M = 8.0
 OBS_STRETCH = True
 
 
+# Climb along the first leg and descend along the last one instead of vertically over the
+# pad. R2 times a leg by max(horizontal / v_h, climb / v_up), so the climb overlaps the
+# cruise: no hover power during a vertical climb (p0 for ~5-25 s per aircraft) and, for
+# scouts leaving at t = 0, every visit that many seconds earlier. Falls back to the
+# vertical climb when the diagonal leg would cross a zone or protected area, or is too
+# short to hide the climb. Off: the kit's vertical climb and descent.
+DIAGONAL_CLIMB = True
+# Effector cruise layer sets, tried in order for a strike team; member i flies at
+# layers[i % len(layers)]. First the whole team at the 30 m floor: team members arrive a
+# few seconds apart, in trail, and less climb saves energy (e_climb x 10-100 m each). Then
+# the kit's three rotations of 40/85/130 m when the low team breaks separation.
+EFFECTOR_Z = ((30.0,),) + tuple(tuple(EFFECTOR_LAYERS[(i + r) % len(EFFECTOR_LAYERS)]
+                                      for i in range(len(EFFECTOR_LAYERS)))
+                                for r in range(len(EFFECTOR_LAYERS)))
+
+_cyl = {}
+
+
+def clear_leg(scenario, a, b):
+    """True if the straight leg a-b enters no zone or protected area (R6)."""
+    hit = _cyl.get(id(scenario))
+    if hit is None or hit[0] is not scenario:
+        hit = _cyl[id(scenario)] = (scenario, baseline._cylinders(scenario))
+    return not any(segment_enters_cylinder(a, b, c, r, top) for c, r, top in hit[1])
+
+
+def climb_path(scenario, path, distance, end=False):
+    """path (horizontal at z, from over the pad when not end, to over the pad when end)
+    with a waypoint `distance` along its first (last) leg, where the climb (descent) ends;
+    None when the leg is shorter or the climbing piece enters a zone or protected area."""
+    a, b = (path[-1], path[-2]) if end else (path[0], path[1])
+    seg = hdist(a, b)
+    if seg < distance + 1e-6:
+        return None
+    f = distance / seg
+    mid = (a[0] + (b[0] - a[0]) * f, a[1] + (b[1] - a[1]) * f, a[2])
+    ground = (a[0], a[1], 0.0)
+    if not (clear_leg(scenario, mid, ground) if end else clear_leg(scenario, ground, mid)):
+        return None
+    return path[:-1] + [mid, path[-1]] if end else [path[0], mid] + path[1:]
+
+
+def effector_route(eff, contact, arrive, z, angle, scenario):
+    """The kit's _effector_route, climbing along the first leg (DIAGONAL_CLIMB)."""
+    if not DIAGONAL_CLIMB:
+        return _effector_route(eff, contact, arrive, z, angle, scenario)
+    home = eff.home
+    reach = min(baseline.APPROACH_M, 0.5 * hdist(home, contact.pos))
+    ux, uy = baseline._toward_home(contact, home, angle)
+    a_pt = (contact.pos[0] + ux * reach, contact.pos[1] + uy * reach, z)
+    e_pt = (contact.pos[0], contact.pos[1], baseline.ENGAGE_Z)
+    path = _cached_detour([(home[0], home[1], z), a_pt], scenario)
+    if path is None:
+        return None, arrive
+    v_h = SPEED_FACTOR * eff.v_h_mps
+    t_final = max(hdist(a_pt, e_pt) / v_h,
+                  (z - baseline.ENGAGE_Z) / (SPEED_FACTOR * eff.v_down_mps)) + 0.2
+    v_cruise = min(v_h, best_range_speed(eff.power))
+    total = baseline._length(path)
+    path = climb_path(scenario, path, v_cruise * (z / (SPEED_FACTOR * eff.v_up_mps) + 0.5))
+    if path is None:
+        return _effector_route(eff, contact, arrive, z, angle, scenario)
+    t_cruise = total / v_cruise
+    earliest = t_cruise + t_final
+    if arrive < earliest:
+        return None, earliest
+    t_a = arrive - t_final
+    t_o = t_a - t_cruise
+    wps = [baseline._wp(t_o, home)]
+    for k in range(1, len(path) - 1):
+        wps.append(baseline._wp(t_o + t_cruise * baseline._length(path[:k + 1]) / total, path[k]))
+    wps.append(baseline._wp(t_a, a_pt))
+    wps.append(baseline._wp(arrive, e_pt, action="engage", target=contact.id))
+    return wps, earliest
+
+
 def eco_speed(scout):
     return min(SPEED_FACTOR * scout.v_h_mps, best_range_speed(scout.power))
 
@@ -89,18 +165,22 @@ def obs_point(scenario, scout, contact, angle, z):
     return contact.pos[0] + ux * off, contact.pos[1] + uy * off
 
 
-def build_scout_route(scout, tasks, depart, z, scenario, speed):
-    """The kit's _scout_route with an explicit cruise speed (same waypoints at the kit speed)."""
+def build_scout_route(scout, tasks, depart, z, scenario, speed, diagonal=None):
+    """The kit's _scout_route with an explicit cruise speed (same waypoints at the kit speed
+    without DIAGONAL_CLIMB). Diagonal: the first leg climbs and the last descends."""
+    if diagonal is None:
+        diagonal = DIAGONAL_CLIMB and bool(tasks)
     rules_ = scenario.rules
     detour, length, wp = baseline._detour, baseline._length, baseline._wp
     home = scout.home
     above = (home[0], home[1], z)
     t = depart
     wps = [wp(t, home)]
-    t += z / (SPEED_FACTOR * scout.v_up_mps) + 0.5
-    wps.append(wp(t, above))
+    if not diagonal:
+        t += z / (SPEED_FACTOR * scout.v_up_mps) + 0.5
+        wps.append(wp(t, above))
     cur = above
-    for task in tasks:
+    for n, task in enumerate(tasks):
         px, py = task["point"]
         cpos = task.get("cpos")
         if cpos is not None:
@@ -115,6 +195,10 @@ def build_scout_route(scout, tasks, depart, z, scenario, speed):
         if path is None:
             return None
         total = length(path)
+        if diagonal and n == 0:
+            path = climb_path(scenario, path, speed * (z / (SPEED_FACTOR * scout.v_up_mps) + 0.5))
+            if path is None:
+                return build_scout_route(scout, tasks, depart, z, scenario, speed, False)
         lo, hi = task["window"]
         arrive = max(t + total / speed, lo)
         if arrive + rules_.obs_dwell_s > hi:
@@ -130,10 +214,18 @@ def build_scout_route(scout, tasks, depart, z, scenario, speed):
         return None
     total = length(path)
     arrive = t + total / speed
+    if diagonal:
+        path = climb_path(scenario, path, speed * (z / (SPEED_FACTOR * scout.v_down_mps) + 0.5),
+                          end=True)
+        if path is None:
+            return build_scout_route(scout, tasks, depart, z, scenario, speed, False)
     for k in range(1, len(path) - 1):
         wps.append(wp(t + (arrive - t) * length(path[:k + 1]) / total, path[k]))
-    wps.append(wp(arrive, above))
-    wps.append(wp(arrive + z / (SPEED_FACTOR * scout.v_down_mps) + 0.5, home))
+    if diagonal:
+        wps.append(wp(arrive, home))
+    else:
+        wps.append(wp(arrive, above))
+        wps.append(wp(arrive + z / (SPEED_FACTOR * scout.v_down_mps) + 0.5, home))
     for w in wps:
         if "target_id" in w:
             w["target"] = w.pop("target_id")
@@ -155,7 +247,8 @@ def raw_energy_wh(route, scout):
 
 
 def _depart(scout, tasks, z, speed, shift):
-    travel = hdist(scout.home, tasks[0]["point"]) / speed + z / scout.v_up_mps + 3.0
+    climb = 0.0 if DIAGONAL_CLIMB else z / scout.v_up_mps
+    travel = hdist(scout.home, tasks[0]["point"]) / speed + climb + 3.0
     return max(0.0, tasks[0]["window"][0] - travel) + shift
 
 
@@ -185,7 +278,7 @@ def scout_tour(scenario, scout, tasks, z, shift=0.0, depart=None):
     Memoised: sibling branches rebuild identical tours many times. Routes are never edited
     after construction, so the waypoint dicts are shared; the list itself is a copy.
     """
-    key = (id(scenario), scout.id, z, shift, depart, SCOUT_SPEED_MODE, OBS_STRETCH,
+    key = (id(scenario), scout.id, z, shift, depart, SCOUT_SPEED_MODE, OBS_STRETCH, DIAGONAL_CLIMB,
            tuple((t["cid"], tuple(t["point"]), tuple(t["window"])) for t in tasks))
     hit = _tours.get(key)
     if hit is None or hit[0] is not scenario:
@@ -205,8 +298,9 @@ def scout_reachable(scenario, scout, tasks, pos, z, prev_route=None):
     """
     rules_ = scenario.rules
     speed = eco_speed(scout) if SCOUT_SPEED_MODE == "eco" else fast_speed(scout)
-    climb = z / (SPEED_FACTOR * scout.v_up_mps) + 0.5
-    descend = z / (SPEED_FACTOR * scout.v_down_mps) + 0.5
+    # Diagonal: the climb and descent overlap the cruise legs (lower bound 0).
+    climb = 0.0 if DIAGONAL_CLIMB else z / (SPEED_FACTOR * scout.v_up_mps) + 0.5
+    descend = 0.0 if DIAGONAL_CLIMB else z / (SPEED_FACTOR * scout.v_down_mps) + 0.5
     task = tasks[pos]
     lo, hi = task["window"]
     # Stretched observation points may be pulled in by up to ~35 m at 110 m altitude.
@@ -237,14 +331,23 @@ PAD_TAKEOFFS = True
 STRIKE_DELAYS = (0.0, 4.0, 8.0, 14.0, 20.0, 30.0, 45.0, 90.0)
 
 
-def takeoff_need(scenario, a, b):
-    """Seconds two takeoffs from these pads must be apart, or None if far enough."""
+def takeoff_need(scenario, a, b, level=False):
+    """Seconds two takeoffs from these pads must be apart, or None if far enough.
+    level: both leave the pad climbing along a cruise leg, so the later one trails the
+    earlier at cruise speed instead of rising beneath it at climb speed."""
     d_sep = scenario.rules.d_sep_m + 2.0
     gap = hdist(a.home, b.home)
     if gap >= d_sep:
         return None
-    climb = SPEED_FACTOR * min(a.v_up_mps, b.v_up_mps)
-    return math.sqrt(max(0.0, d_sep * d_sep - gap * gap)) / climb + 1.0
+    if level:
+        rate = SPEED_FACTOR * min(a.v_h_mps, b.v_h_mps)
+    else:
+        rate = SPEED_FACTOR * min(a.v_up_mps, b.v_up_mps)
+    return math.sqrt(max(0.0, d_sep * d_sep - gap * gap)) / rate + 1.0
+
+
+def _diagonal(route):
+    return len(route) > 1 and (route[1]["x"], route[1]["y"]) != (route[0]["x"], route[0]["y"])
 
 
 def pad_conflict(scenario, aircraft, routes, extra):
@@ -254,7 +357,8 @@ def pad_conflict(scenario, aircraft, routes, extra):
         for oid, other in list(extra.items()) + list(routes.items()):
             if oid == aid or not other or (oid in extra and other is not extra[oid]):
                 continue
-            need = takeoff_need(scenario, mine, aircraft[oid])
+            need = takeoff_need(scenario, mine, aircraft[oid],
+                                _diagonal(route) and _diagonal(other))
             if need is not None and abs(route[0]["t"] - other[0]["t"]) < need:
                 return True
     return False
@@ -267,7 +371,7 @@ def takeoff_shift(scenario, aircraft, routes, scout, depart, limit=40.0, step=2.
     for aid, route in routes.items():
         if aid == scout.id or not route:
             continue
-        need = takeoff_need(scenario, scout, aircraft[aid])
+        need = takeoff_need(scenario, scout, aircraft[aid], DIAGONAL_CLIMB and _diagonal(route))
         if need is not None:
             others.append((route[0]["t"], need))
     shift = 0.0
@@ -295,10 +399,12 @@ def tour_estimate(scenario, scout, legs, z):
     """
     rules_, power = scenario.rules, scout.power
     speed = eco_speed(scout) if SCOUT_SPEED_MODE == "eco" else fast_speed(scout)
-    climb = z / (SPEED_FACTOR * scout.v_up_mps) + 0.5
+    # Diagonal: the climb and descent overlap the cruise legs (lower bound: no extra time).
+    climb = 0.0 if DIAGONAL_CLIMB else z / (SPEED_FACTOR * scout.v_up_mps) + 0.5
     home = scout.home[:2]
     first = max(0.0, hdist(home, legs[0][0]) - legs[0][2])
-    t = max(0.0, legs[0][1][0] - (first / speed + z / scout.v_up_mps + 3.0)) + climb
+    lead = 0.0 if DIAGONAL_CLIMB else z / scout.v_up_mps
+    t = max(0.0, legs[0][1][0] - (first / speed + lead + 3.0)) + climb
     wh = power.p0_w * climb / 3600.0 + power.e_climb_wh_per_m * z
     here, slack, finishes = home, 0.0, []
     for point, (lo, hi), reach in legs:
@@ -314,7 +420,7 @@ def tour_estimate(scenario, scout, legs, z):
         finishes.append(t)
         here, slack = point, reach
     back = max(0.0, hdist(here, home) - slack) / speed
-    descent = z / (SPEED_FACTOR * scout.v_down_mps) + 0.5
+    descent = 0.0 if DIAGONAL_CLIMB else z / (SPEED_FACTOR * scout.v_down_mps) + 0.5
     wh += ((power.p0_w + power.k_v * speed * speed) * back + power.p0_w * descent) / 3600.0
     return finishes, t + back + descent, wh
 
@@ -410,6 +516,8 @@ def _cached_detour(points, scenario):
 
 # The kit's route builders look _detour up in their module; results are unchanged.
 baseline._detour = _cached_detour
+# The warm start (kit planner) builds effector routes through the module too.
+baseline._effector_route = effector_route
 
 
 @dataclass
@@ -876,15 +984,15 @@ class Search:
             found = False
             spacing = min(5.0, self.sc.rules.sync_window_s / max(1, len(team)-1))
             delays = STRIKE_DELAYS if PAD_TAKEOFFS else (0.0, 8.0, 20.0, 45.0, 90.0)
-            for delay, angle, rotation in itertools.product(delays, (0.0, 35.0, -35.0), range(3)):
+            for delay, angle, layers in itertools.product(delays, (0.0, 35.0, -35.0), EFFECTOR_Z):
                 self.checker.check_time(stop)
                 arrive = base + delay
                 if arrive + spacing*(len(team)-1) > contact.window[1] + EPS:
                     break
                 extra = {scout.id: scout_route}
                 for i, eff in enumerate(team):
-                    z = EFFECTOR_LAYERS[(i + rotation) % len(EFFECTOR_LAYERS)]
-                    route, earliest = _effector_route(eff, contact, arrive + spacing*i, z, angle, self.sc)
+                    z = layers[i % len(layers)]
+                    route, earliest = effector_route(eff, contact, arrive + spacing*i, z, angle, self.sc)
                     if route is None:
                         break
                     extra[eff.id] = route

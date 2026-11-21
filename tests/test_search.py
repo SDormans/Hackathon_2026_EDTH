@@ -376,12 +376,15 @@ class LnsTests(unittest.TestCase):
         self.assertIsNotNone(built)
         tasks, route = built
         # The kit's speed and observation offset: eco mode, no stretch.
-        saved = search_planner.SCOUT_SPEED_MODE, search_planner.OBS_STRETCH
-        search_planner.SCOUT_SPEED_MODE, search_planner.OBS_STRETCH = "eco", False
+        saved = (search_planner.SCOUT_SPEED_MODE, search_planner.OBS_STRETCH,
+                 search_planner.DIAGONAL_CLIMB)
+        (search_planner.SCOUT_SPEED_MODE, search_planner.OBS_STRETCH,
+         search_planner.DIAGONAL_CLIMB) = "eco", False, False
         try:
             self.assertEqual(scout_tour(sc, scout, tasks, 70.0, 7.0), route)
         finally:
-            search_planner.SCOUT_SPEED_MODE, search_planner.OBS_STRETCH = saved
+            (search_planner.SCOUT_SPEED_MODE, search_planner.OBS_STRETCH,
+             search_planner.DIAGONAL_CLIMB) = saved
 
     def test_removal_is_valid_and_frees_the_contact(self):
         sc = Scenario.from_dict(generate('L2', 3))
@@ -496,6 +499,76 @@ class PadTimingTests(unittest.TestCase):
     def test_search_with_pad_takeoffs_exports_valid_plans(self):
         sc = Scenario.from_dict(generate('L3', 2))
         for state, result in Search(sc, seconds=4.0).run():
+            self.assertTrue(evaluate(sc, state.plan(sc.seed)).valid)
+
+
+
+class ClimbTests(unittest.TestCase):
+    """DIAGONAL_CLIMB: climbs and descents ride on the first and last cruise legs."""
+
+    def legs_ok(self, sc, routes):
+        from fleetkit import validator
+        from fleetkit.model import parse_plan
+        parsed, errors = parse_plan({'seed': sc.seed, 'routes': [
+            {'aircraft': aid, 'waypoints': r} for aid, r in routes.items()]})
+        self.assertEqual(errors, [])
+        return [v.rule for v in validator._r2(sc, parsed) + validator._r6(sc, parsed)]
+
+    def test_scout_tour_climbs_on_the_way_and_is_cheaper(self):
+        from search_planner import raw_energy_wh
+        sc = Scenario.from_dict(generate('L2', 3))
+        scout = next(a for a in sc.aircraft if a.type == 'scout')
+        contact = next(c for c in sc.contacts if c.cls == 'unknown' and c.window)
+        tasks, _ = _Planner(sc)._add_observation(scout, contact, 70.0, 0.0, 7.0)
+        tours = {}
+        for diagonal in (False, True):
+            search_planner.DIAGONAL_CLIMB = diagonal
+            try:
+                tours[diagonal] = scout_tour(sc, scout, tasks, 70.0, depart=0.0)
+            finally:
+                search_planner.DIAGONAL_CLIMB = True
+        flat, diag = tours[False], tours[True]
+        self.assertEqual((flat[1]['x'], flat[1]['y']), tuple(scout.home[:2]))
+        self.assertNotEqual((diag[1]['x'], diag[1]['y']), tuple(scout.home[:2]))
+        self.assertEqual((diag[-1]['x'], diag[-1]['y'], diag[-1]['z']), tuple(scout.home))
+        self.assertEqual(self.legs_ok(sc, {scout.id: diag}), [])
+        seen = lambda r: next(w['t'] for w in r if w.get('action') == 'observe')
+        self.assertLess(seen(diag), seen(flat))
+        self.assertLess(raw_energy_wh(diag, scout), raw_energy_wh(flat, scout))
+
+    def test_effector_route_is_earlier_and_falls_back_over_a_zone(self):
+        # The kit's builder; search_planner patches fleetkit.baseline to its own.
+        from search_planner import _effector_route, effector_route
+        data = generate('L2', 3)
+        sc = Scenario.from_dict(data)
+        eff = next(a for a in sc.aircraft if a.type == 'effector')
+        target = next(c for c in sc.contacts if c.cls == 'hostile')
+        kit, kit_earliest = _effector_route(eff, target, 0.0, 130.0, 0.0, sc)
+        route, earliest = effector_route(eff, target, kit_earliest, 130.0, 0.0, sc)
+        self.assertLess(earliest, kit_earliest)
+        self.assertNotEqual((route[1]['x'], route[1]['y']), tuple(eff.home[:2]))
+        self.assertEqual(self.legs_ok(sc, {eff.id: route}), [])
+        # An 80 m zone right after the pad: flown over at 130 m, but the climbing piece
+        # would cross it, so the route climbs vertically first.
+        hx, hy = eff.home[:2]
+        dx, dy = target.pos[0] - hx, target.pos[1] - hy
+        norm = (dx * dx + dy * dy) ** 0.5
+        data['zones'] = [dict(id='ZX', center=[hx + 60 * dx / norm, hy + 60 * dy / norm],
+                              radius_m=20.0, top_m=80.0)]
+        zoned = Scenario.from_dict(data)
+        route, _ = effector_route(eff, target, kit_earliest + 30, 130.0, 0.0, zoned)
+        self.assertEqual((route[1]['x'], route[1]['y']), tuple(eff.home[:2]))
+        self.assertEqual(self.legs_ok(zoned, {eff.id: route}), [])
+
+    def test_level_takeoffs_need_a_shorter_gap(self):
+        from search_planner import takeoff_need
+        sc = PadTimingTests().pads(11.0)
+        a, b = sc.aircraft[0], sc.aircraft[1]
+        self.assertLess(takeoff_need(sc, a, b, True), takeoff_need(sc, a, b))
+
+    def test_search_with_diagonal_climbs_exports_valid_plans(self):
+        sc = Scenario.from_dict(generate('L4', 1))
+        for state, result in Search(sc, seconds=6.0).run():
             self.assertTrue(evaluate(sc, state.plan(sc.seed)).valid)
 
 
