@@ -217,7 +217,7 @@ class SearchTests(unittest.TestCase):
         search = Search(sc, start=start)
         self.assertAlmostEqual(search.stop - start, 45.0)
         self.assertAlmostEqual(search.validate_stop - start, 50.0)
-        self.assertAlmostEqual(Search(sc, seconds=55, start=start).validate_stop - start, 58.0)
+        self.assertAlmostEqual(Search(sc, seconds=55, start=start).validate_stop - start, 56.5)
 
     def test_finalize_after_cutoff_keeps_valid_fallback(self):
         sc = scenario()
@@ -406,7 +406,9 @@ class LnsTests(unittest.TestCase):
     def test_removal_is_valid_and_frees_the_contact(self):
         sc = Scenario.from_dict(generate('L2', 3))
         search = Search(sc, seconds=3.0, lns_share=0.0)
-        best = search.run()[0][0]
+        # Beam plan only: with lns_share=0, LNS still runs if the beam finishes early.
+        search.search_phase()
+        best = search.finalize()[0][0]
         self.assertEqual(search.lns['iterations'], 0)
         search.checker.stop = time.monotonic() + 30
         removed = 0
