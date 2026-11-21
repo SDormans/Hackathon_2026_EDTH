@@ -856,7 +856,7 @@ class WarmPlanner(_Planner):
 
 
 class Search:
-    def __init__(self, scenario, seconds=55.0, top_n=5, beam_width=6, start=None, lns_share=0.4,
+    def __init__(self, scenario, seconds=45.0, top_n=5, beam_width=6, start=None, lns_share=0.4,
                  interleave=False, adaptive=False, restarts=True, widen=False,
                  scout_speed="fast", obs_stretch=True):
         if seconds < 0 or not 1 <= top_n <= 100 or not 1 <= beam_width <= 100:
@@ -873,6 +873,8 @@ class Search:
         self.start = time.monotonic() if start is None else start
         # Includes input reading when the CLI passes its process start time.
         self.stop = self.start + min(seconds, 55.0)
+        # Final official validation starts no new call after this; 50 s at the default budget.
+        self.validate_stop = min(self.start + 58.0, self.stop + 5.0)
         self.top_n, self.width = top_n, beam_width
         # The beam ends early so the final share of the budget repairs its best plan.
         self.beam_stop = self.stop - lns_share * max(0.0, self.stop - self.start)
@@ -1312,7 +1314,7 @@ class Search:
         # plans because every scout already has its return-and-land leg.
         verified = []
         for state in self.archive:
-            if time.monotonic() >= self.start + 58.0:
+            if time.monotonic() >= self.validate_stop:
                 break
             result = evaluate(self.sc, state.plan(self.sc.seed))
             if result.valid:

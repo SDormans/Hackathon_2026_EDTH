@@ -211,6 +211,23 @@ class SearchTests(unittest.TestCase):
         self.assertEqual(verified[0][1].score, 0)
         self.assertTrue(evaluate(sc, verified[0][0].plan(sc.seed)).valid)
 
+    def test_default_budget_and_validation_cutoff(self):
+        sc = scenario()
+        start = time.monotonic()
+        search = Search(sc, start=start)
+        self.assertAlmostEqual(search.stop - start, 45.0)
+        self.assertAlmostEqual(search.validate_stop - start, 50.0)
+        self.assertAlmostEqual(Search(sc, seconds=55, start=start).validate_stop - start, 58.0)
+
+    def test_finalize_after_cutoff_keeps_valid_fallback(self):
+        sc = scenario()
+        search = Search(sc, seconds=0)
+        search.archive = [search.root]
+        search.validate_stop = time.monotonic() - 1.0
+        verified = search.finalize()
+        self.assertTrue(verified[0][1].valid)
+        self.assertEqual(verified[0][0].routes, {})
+
     def test_no_serviceable_contacts(self):
         sc = scenario()
         sc.contacts = []
