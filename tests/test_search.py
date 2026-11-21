@@ -17,8 +17,10 @@ sys.path.insert(0, str(ROOT))
 # Entry point also supplies the local fleetkit discovery used by these tests.
 import planner
 from candidate_matrix import CandidateMatrix
-from search_planner import IncrementalValidator, Search, unserved_reason
-from fleetkit.baseline import greedy_plan
+import search_planner
+from search_planner import (DESTROY_OPERATORS, IncrementalValidator, Search, scout_tour,
+                            unserved_reason)
+from fleetkit.baseline import _Planner, greedy_plan
 from fleetkit.generator import generate
 from fleetkit.model import Scenario, save_json
 from fleetkit.scorer import evaluate
@@ -89,6 +91,30 @@ class IncrementalTests(unittest.TestCase):
             if actual is not None:
                 self.assertAlmostEqual(actual.score, official.score)
 
+    def test_cached_detour_matches_official(self):
+        sc = Scenario.from_dict(generate('L3', 1))
+        rng = random.Random(3)
+        for _ in range(200):
+            pts = [(rng.uniform(-500, 6000), rng.uniform(-500, 6000), rng.choice([40.0, 70.0, 130.0]))
+                   for _ in range(2)]
+            expected = search_planner._official_detour(list(pts), sc)
+            self.assertEqual(search_planner._cached_detour(list(pts), sc), expected)
+            self.assertEqual(search_planner._cached_detour(list(pts), sc), expected)
+
+    def test_quick_reject_matches_full_validator(self):
+        search, checker = self.checker()
+        aid = next(iter(self.routes))
+        for field, shift in (('t', -10000.0), ('t', 10000.0)):
+            route = copy.deepcopy(self.routes[aid])
+            for wp in route:
+                wp[field] += shift
+            rule = checker.quick_reject({aid: route})
+            self.assertIsNotNone(rule)
+            checker.last_rule = None
+            self.assertIsNone(checker.extend(search.root, {aid: route}))
+            self.assertEqual(checker.last_rule, rule)
+        self.assertIsNone(checker.quick_reject(self.routes))
+
     def test_rebuilt_scout_must_keep_previous_confirmations(self):
         search, checker = self.checker()
         parent = checker.extend(search.root, self.routes)
@@ -109,6 +135,19 @@ class IncrementalTests(unittest.TestCase):
         parent = checker.extend(search.root, self.routes)
         self.assertIsNone(checker.extend(parent, {'duplicate-scout': self.routes[aid]}))
         self.assertIn('R8', checker.rejections)
+
+    def test_signature_identifies_routes(self):
+        search, checker = self.checker()
+        a = checker.extend(search.root, self.routes)
+        b = checker.extend(search.root, copy.deepcopy(self.routes))
+        self.assertEqual(a.signature(), b.signature())
+        aid = next(iter(self.routes))
+        route = copy.deepcopy(self.routes[aid])
+        route[-1]['t'] += 1.0
+        c = checker.extend(a, {aid: route})
+        if c is not None:
+            self.assertNotEqual(a.signature(), c.signature())
+        self.assertNotEqual(search.root.signature(), a.signature())
 
     def test_branches_do_not_mutate_parent(self):
         search, checker = self.checker()
@@ -148,6 +187,22 @@ class SearchTests(unittest.TestCase):
                             for n in search.trace if isinstance(n['decision'], dict)))
         for n in search.trace[1:]:
             self.assertLess(n['parent'], n['id'])
+
+    def test_repair_adds_unserved_unknown(self):
+        sc = scenario()
+        plan = greedy_plan(sc)
+        sc.contacts.append(replace(sc.contacts[1], id='U', cls='unknown', points=30,
+                                   needs={}, pos=(900.0, 200.0, 0.0)))
+        search = Search(sc, seconds=5)
+        search.matrix = CandidateMatrix(sc)
+        state = search.checker.extend(search.root, {r['aircraft']: r['waypoints'] for r in plan['routes']})
+        self.assertNotIn('U', state.served)
+        repaired = search.repair(state, 0)
+        self.assertIn('U', repaired.served)
+        self.assertGreater(repaired.score, state.score)
+        result = evaluate(sc, repaired.plan(sc.seed))
+        self.assertTrue(result.valid)
+        self.assertAlmostEqual(result.score, repaired.score)
 
     def test_expired_budget_returns_valid_empty_plan(self):
         sc = scenario()
@@ -277,6 +332,129 @@ class DiagnosticsTests(unittest.TestCase):
             self.assertEqual(sum(entry['outcomes'].values()), entry['attempts'])
         self.assertEqual(sum(report['unserved'].values()), len(targets - served))
         self.assertEqual(set(report['unserved']), set(report['unserved_points']))
+
+
+def tour_scenario():
+    """U2's early window only fits before U1, so appending fails but insertion works."""
+    aircraft = [dict(id='scout0', type='scout', subtype=None, home=[0, 0, 0], v_h_mps=30,
+                     v_up_mps=10, v_down_mps=15, capacity_wh=400, battery_pct=100,
+                     power=dict(p0_w=80, k_v=.1, e_climb_wh_per_m=.01))]
+    contacts = [dict(id='U1', **{'class': 'unknown'}, pos=[3000, 0, 0], points=50,
+                     window_s=[300, 900]),
+                dict(id='U2', **{'class': 'unknown'}, pos=[800, 300, 0], points=30,
+                     window_s=[40, 200])]
+    return Scenario.from_dict(dict(seed=2, level='test', horizon_s=1000,
+                                   aircraft=aircraft, contacts=contacts, zones=[]))
+
+
+class LnsTests(unittest.TestCase):
+    def test_tour_insertion_serves_what_appending_cannot(self):
+        sc = tour_scenario()
+        search = Search(sc, seconds=10)
+        search.matrix = CandidateMatrix(sc)
+        u1, u2 = sc.contact_by_id()['U1'], sc.contact_by_id()['U2']
+        first, _ = next(search.children(search.root, u1, search.stop))
+        self.assertEqual(first.served, {'U1'})
+        self.assertEqual(list(search.children(first, u2, search.stop)), [])
+        child, _ = next(search.children(first, u2, search.stop, insert=True))
+        self.assertEqual(child.served, {'U1', 'U2'})
+        self.assertEqual([t['cid'] for t in child.tasks['scout0']], ['U2', 'U1'])
+        result = evaluate(sc, child.plan(sc.seed))
+        self.assertTrue(result.valid)
+        self.assertAlmostEqual(result.score, child.score, places=6)
+
+    def test_append_tour_matches_baseline(self):
+        sc = Scenario.from_dict(generate('L2', 3))
+        p = _Planner(sc)
+        scout = next(a for a in sc.aircraft if a.type == 'scout')
+        contact = next(c for c in sc.contacts if c.cls == 'unknown' and c.window)
+        built = p._add_observation(scout, contact, 70.0, 0.0, 7.0)
+        self.assertIsNotNone(built)
+        tasks, route = built
+        self.assertEqual(scout_tour(sc, scout, tasks, 70.0, 7.0), route)
+
+    def test_removal_is_valid_and_frees_the_contact(self):
+        sc = Scenario.from_dict(generate('L2', 3))
+        search = Search(sc, seconds=3.0, lns_share=0.0)
+        best = search.run()[0][0]
+        self.assertEqual(search.lns['iterations'], 0)
+        search.checker.stop = time.monotonic() + 30
+        removed = 0
+        for cid in sorted(best.served):
+            smaller = search.remove(best, cid)
+            if smaller is None:
+                continue
+            removed += 1
+            self.assertNotIn(cid, smaller.served)
+            self.assertLessEqual(smaller.served, best.served)
+            result = evaluate(sc, smaller.plan(sc.seed))
+            self.assertTrue(result.valid, [str(v) for v in result.violations][:3])
+            self.assertAlmostEqual(result.score, smaller.score, places=6)
+        self.assertGreater(removed, 0)
+
+    def test_lns_phase_runs_and_exports_valid_plans(self):
+        sc = Scenario.from_dict(generate('L2', 3))
+        search = Search(sc, seconds=3.0, lns_share=0.5)
+        verified = search.run()
+        self.assertGreater(search.lns['iterations'], 0)
+        self.assertIn('lns', search.report(verified))
+        for state, result in verified:
+            self.assertTrue(evaluate(sc, state.plan(sc.seed)).valid)
+            self.assertAlmostEqual(result.score, state.score, places=6)
+        with self.assertRaises(ValueError):
+            Search(sc, seconds=1, lns_share=1.5)
+
+    def test_destroy_operators_pick_served_contacts(self):
+        sc = Scenario.from_dict(generate('L2', 3))
+        search = Search(sc, seconds=3.0, lns_share=0.0)
+        best = search.run()[0][0]
+        by_id = sc.contact_by_id()
+        served = sorted(best.served)
+        priorities = {c: 1.0 for c in served}
+        rng = random.Random(1)
+        for op in DESTROY_OPERATORS:
+            for _ in range(5):
+                picked = search.destroy(op, served, by_id, best, priorities, rng)
+                self.assertTrue(1 <= len(picked) <= 4, op)
+                self.assertEqual(len(set(picked)), len(picked), op)
+                self.assertLessEqual(set(picked), best.served, op)
+
+    def test_variants_export_valid_plans(self):
+        sc = Scenario.from_dict(generate('L2', 3))
+        for flags in ({'interleave': True}, {'adaptive': True}, {'restarts': False}):
+            with self.subTest(**flags):
+                search = Search(sc, seconds=3.0, lns_share=0.5, **flags)
+                bursts = []
+                improve = search.improve
+                search.improve = lambda c, p, stop=None: (bursts.append(stop), improve(c, p, stop))[1]
+                verified = search.run()
+                self.assertGreater(search.lns['iterations'], 0)
+                for state, result in verified:
+                    self.assertTrue(evaluate(sc, state.plan(sc.seed)).valid)
+                    self.assertAlmostEqual(result.score, state.score, places=6)
+                report = search.report(verified)['lns']
+                for name, value in flags.items():
+                    self.assertEqual(report['variant'][name], value)
+                if 'interleave' in flags:
+                    self.assertGreater(len(bursts), 1)
+                    self.assertTrue(all(b is not None and b <= search.stop for b in bursts[:-1]))
+                else:
+                    self.assertEqual(bursts, [None])
+                if 'adaptive' in flags:
+                    self.assertNotEqual(set(report['weights'].values()), {1.0})
+
+
+class AlnsTests(unittest.TestCase):
+    def test_alns_skips_lns_and_exports_valid_plans(self):
+        from alns import AlnsSearch
+        sc = Scenario.from_dict(generate('L2', 3))
+        search = AlnsSearch(sc, 3.0)
+        verified = search.run()
+        self.assertEqual(search.lns['iterations'], 0)
+        self.assertGreater(search.alns_stats['iterations'], 0)
+        for state, result in verified:
+            self.assertTrue(evaluate(sc, state.plan(sc.seed)).valid)
+            self.assertAlmostEqual(result.score, state.score, places=6)
 
 
 if __name__ == '__main__':

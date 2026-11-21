@@ -1,6 +1,6 @@
 # Fleet search planner
 
-A standard-library planner that turns the baseline's route candidates into a bounded search tree. It always keeps valid partial fleet plans, returns the best plan found, and can export the best N distinct plans and an interactive tree.
+A standard-library planner that turns the baseline's route candidates into a bounded search tree, then spends the last part of the budget repairing the best plan with large neighbourhood search (LNS). It always keeps valid partial fleet plans, returns the best plan found, and can export the best N distinct plans and an interactive tree.
 
 Run from this directory:
 
@@ -14,7 +14,7 @@ For a shorter run with five candidate plans and the tree:
 
 ```sh
 python3 planner.py path/to/scenario.json output/plan.json \
-  --seconds 5 --top-n 5 --beam-width 6 --artifacts output/search
+  --seconds 5 --top-n 5 --beam-width 6 --lns-share 0.4 --artifacts output/search
 ```
 
 Open `output/search/tree.html` in a browser. Drag to pan, scroll to zoom, click nodes to inspect decisions, and click a ranked solution to highlight its path. The directory also contains `tree.json` with parent links, decisions, scores and rejection counts, plus `plan-01.json`, `plan-02.json`, etc. These are ordinary plans accepted by the official validator. There may be fewer than N if the run finds fewer distinct valid plans.
@@ -39,6 +39,8 @@ The search reuses the baseline's route builders and explores alternatives at tho
 | Scout and flight settings | Stops at the first valid improvement | Can retain multiple assignments and flight settings across branches |
 | Contact order | Hostiles by points, then unknowns by points | Explores scarcity/value, window-close, points and seeded randomised orders |
 | Candidate checking | Revalidates the entire plan for each proposal | Reuses unchanged-route checks and checks every separation pair involving a changed route |
+| Revisiting choices | Never removes an accepted assignment | LNS removes a few served contacts and reinserts contacts, so resources move to better combinations |
+| Scout tours | Appends each visit to the end of a tour | LNS also tries the cheapest earlier positions in each tour |
 
 For example, one test gives a 90-point contact both available light effectors, while two 70-point contacts each need one. Greedy commits both effectors to the 90-point contact. A skip branch keeps them available for the 140-point pair; the test confirms that the resulting valid plan also wins after energy and effector costs.
 
@@ -52,6 +54,9 @@ Each node holds routes, scout tasks, consumed effectors and a score. At each con
 - `search_planner.py` first follows the original greedy choices with faster validation, for up to a quarter of the budget (capped at 10 seconds). If interrupted, it retains the last accepted plan. It then searches beams using scarcity/value, window-close, points and seeded randomised orders.
 - Every extension applies the official local rules to changed routes, rechecks confirmation and strike completeness globally, and checks separation between changed routes and all other routes. Unchanged pairs retain their parent's validation result. Energy and separation flight pieces are cached per branch.
 - The beam keeps at most `--beam-width` distinct states at a depth. A separate archive keeps up to `--top-n` distinct valid plans across the entire search. The two settings are independent. Distinct means different assignments or timed waypoints, so solutions may serve the same contacts.
+- When the beam phase ends, a greedy **repair** pass fills the best plan: unserved unknowns, then hostiles, are inserted at the cheapest scout-tour positions with the free effectors (at most 0.25 s per contact and a quarter of the LNS share). LNS then starts from the best archived plan.
+- Route builders reuse memoised zone detours, and candidates whose waypoints fall outside the horizon or a contact's window are rejected before parsing. Duplicate plans are detected from per-route waypoint tuples.
+- The last `--lns-share` of the budget (default 0.4) runs LNS on the best plan. Each iteration removes 1–4 served contacts, chosen at random or as neighbours of a random contact, rebuilding the affected scout tour from its original departure. It then tries to reinsert the removed contacts, their six nearest unserved neighbours and three random unserved contacts. Each scout visit is tried at the three cheapest tour positions (added distance), and the best valid child per contact is kept. Worse plans are sometimes accepted, with a temperature of 1% of the best score falling to zero. After 25 iterations without a new best, the search restarts from a random plan in the top-N archive (`--no-restarts` returns to the best plan instead) and stops after 400 iterations without a new best. Accepted plans enter the archive, so they receive the same final official validation.
 - Expansion has local time caps, preventing an impossible contact from consuming the whole run. Children must improve the parent's actual score. All archive winners receive a full official validation and score before export; final validation stops starting new calls at 58 seconds. The valid empty plan is the last fallback.
 
 The result is the best N plans **found**, not a proof of the global top N. Contact ordering, a bounded beam, fixed flight settings, shortlists and the improving-child restriction can all discard useful alternatives. The trace records accepted nodes and skip branches; failed route attempts are aggregated by rule, rather than stored individually. Trace growth is capped between passes to keep tiny scenarios from producing unlimited diagnostics.
@@ -97,6 +102,48 @@ Greedy and our planner run separately on the **same generated input**, each with
 
 Generation and the external scoring calls are outside each planner's measured runtime. Parallel workers share CPU, so their timing and time-bounded search scores can differ from a single-worker run. Use `--workers 1` when assessing performance under the competition's per-scenario budget. A custom candidate can be compared using `--planner path/to/planner.py`. Existing output directories are rejected to prevent overwriting results.
 
+### LNS batch result
+
+Both planners ran at full budget under the same load, four workers each at the same time, alongside greedy. Seeds 3–5 were not used during development. The validation scenarios ran 16 planners at the same time on eight cores; the greedy total comes from PLAN.md. `--lns-share 0.6` scored 4391.13 on the seeds 3–5 batch, within run-to-run noise of the default.
+
+| Batch | Greedy | Beam only (master) | Beam + LNS | Gain over master |
+|---|---:|---:|---:|---:|
+| L1–L4, seeds 0–2 | 3622.86 | 4556.95 | 5208.17 | +14.3% |
+| L4 only, seeds 0–2 | 1354.26 | 1899.92 | 2452.72 | +29.1% |
+| L3–L4, seeds 3–5 | 2913.46 | 3881.74 | 4334.80 | +11.7% |
+| 8 public validation scenarios | 2664.5 | 3674.65 | 4054.29 | +10.3% |
+
+Beam + LNS matched or beat master on every case and greedy on all 18. Every plan was valid and the slowest run took 55.29 seconds. These are sampled scenarios, not a guarantee for unseen inputs.
+
+### Consolidated branch result
+
+The repair pass and LNS were merged with the upstream opt-in `--alns` phase, then rerun at 55 s with one worker. Each batch below ran concurrently with up to two other benchmark batches on eight cores.
+
+| Batch | Greedy | Beam + repair (fork master) | Beam + repair + LNS (default) | `--alns` |
+|---|---:|---:|---:|---:|
+| L1–L4, seeds 0–2 | 3622.86 | 4655.96 | 5251.52 (+12.8%) | |
+| L4 only, seeds 0–2 (after rebasing on upstream) | 1354.26 | 1998.04 | 2412.22 | 2224.16 |
+
+Every plan was valid and the slowest run took 55.25 seconds. L4-2 scored 665.14 in the first batch and 562.88 after the rebase, so single L4 cases vary by up to about 15% between runs.
+
+### Mixing the search strategies
+
+Three variants were compared with the LNS described above (which then always restarted from the best plan):
+
+- `--interleave`: alternate each beam pass with an LNS burst (burst length = pass time × share / (1 − share)), then a final LNS tail of 10% of the budget.
+- `--adaptive`: adaptive LNS. Destroy operators `random`, `related`, `worst` (lowest-priority served contacts) and `tour` (contacts of one scout tour) are drawn by weight; weights move 20% towards a reward of 3 (new best), 1 (accepted improvement), 0.3 (accepted worse plan) or 0.
+- `--restarts`: when stuck, restart from a random archived plan instead of the best.
+
+All variants ran at full budget with two workers each, four planners at the same time on eight cores. None of these seeds were used during development.
+
+| Batch | Restart from best | Interleave | Adaptive | Archive restarts | Restarts + adaptive | All three |
+|---|---:|---:|---:|---:|---:|---:|
+| L2–L4, seeds 6–8 | 4568.33 | 4535.74 | 4473.54 | **4619.43** | | |
+| L3–L4, seeds 9–11 | 3515.57 | 3594.35 | 3634.68 | **3659.48** | | |
+| L3–L4, seeds 12–14 | 4245.88 | | | **4265.76** | 4210.44 | 4219.51 |
+
+Archive restarts scored highest in all three batches (12544.67 vs 12329.78 over the 21 cases, +1.7%) and are now the default. Per case they won 10, tied 2 and lost 9 against restarting from the best plan; the gain comes mostly from a few large L4 wins, so it is small relative to run-to-run noise. Combining restarts with the other variants scored lower than restarts alone. Every run in these batches was valid and finished inside the time limit.
+
 ### Parallel batch result
 
 A full-budget batch over **L1–L4, seeds 0–2**, with **four concurrent workers**, completed with **12 wins, no ties or losses, and 12 valid outputs**. Neither planner crashed or timed out. These cases overlap earlier tests and are not a held-out evaluation.
@@ -114,6 +161,18 @@ The slowest candidate run finished in 55.23 seconds. Parallel CPU contention can
 ```sh
 python3 analysis/benchmark_search.py --levels L1,L2,L3,L4 --seeds 0-2 --workers 4 --seconds 55
 ```
+
+### Repair and cheaper checks
+
+Same inputs, master vs this change, both with two concurrent benchmark workers per batch running at the same time:
+
+| Batch | Master | With repair | Change |
+|---|---:|---:|---:|
+| 8 public validation scenarios, 55 s | 3768.65 | 3790.20 | +0.6% |
+| L1–L4 seeds 3–4, 55 s | 3164.20 | 3190.15 | +0.8% |
+| L1–L4 seeds 0–2, 20 s (four workers, run separately) | 4417.21 | 4514.93 | +2.2% |
+
+All plans were valid. Gains come from L4 (e.g. L4-401 1077.92 → 1118.71, L4-0 at 20 s 834.78 → 861.03); L1–L3 mostly tie but finish sooner. L4-402 regressed (613.23 → 593.99) and L4-2 at 20 s slightly (447.65 → 446.43): faster checks change which branches fit in the local time caps, so individual cases vary.
 
 ### Local benchmark results
 
@@ -166,7 +225,7 @@ A generated L2-7 demo is available locally at `output/search/tree.html`, with it
 
 ## Hand-in
 
-Copy `planner.py`, `search_planner.py`, `candidate_matrix.py` and `tree_view.py` together. The official runner supplies `fleetkit` via `PYTHONPATH`. Local runs discover the bundled kit; `FLEETKIT_DIR` can explicitly select another copy. No third-party packages are required, and no changes to the official kit are needed.
+Copy `planner.py`, `search_planner.py`, `candidate_matrix.py`, `tree_view.py` and `alns.py` (used only with `--alns`) together. The official runner supplies `fleetkit` via `PYTHONPATH`. Local runs discover the bundled kit; `FLEETKIT_DIR` can explicitly select another copy. No third-party packages are required, and no changes to the official kit are needed.
 
 The original analysis and isolated-mission checker remain in [analysis/](analysis/README.md).
 
