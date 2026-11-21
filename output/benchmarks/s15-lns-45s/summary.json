@@ -1,0 +1,224 @@
+{
+ "settings": {
+  "seconds": 45.0,
+  "timeout": 60,
+  "workers": 1,
+  "cases": [
+   "L1:15",
+   "L1:16",
+   "L1:17",
+   "L2:15",
+   "L2:16",
+   "L2:17",
+   "L3:15",
+   "L3:16",
+   "L3:17",
+   "L4:15",
+   "L4:16",
+   "L4:17"
+  ],
+  "planner": "planner.py",
+  "started_utc": "2026-11-21T10:13:30.581541+00:00"
+ },
+ "complete": true,
+ "elapsed_seconds": 273.1406790000001,
+ "completed": 12,
+ "requested": 12,
+ "total": {
+  "cases": 12,
+  "compared": 12,
+  "baseline_score": 4201.767130915956,
+  "search_score": 5623.669192798078,
+  "improvement": 1421.9020618821223,
+  "improvement_pct": 33.84057272998272,
+  "wins": 12,
+  "ties": 0,
+  "losses": 0,
+  "search_valid": 12,
+  "search_failures": 0,
+  "baseline_failures": 0,
+  "setup_failures": 0,
+  "search_timeouts": 0,
+  "baseline_timeouts": 0,
+  "median_search_seconds": 17.930035541500047,
+  "max_search_seconds": 45.109186000000136,
+  "total_baseline_seconds": 6.172757917000581,
+  "total_search_seconds": 266.33108450000054,
+  "passes": [
+   667,
+   507,
+   534,
+   160,
+   186,
+   178,
+   71,
+   62,
+   84,
+   34,
+   33,
+   40
+  ],
+  "unserved": {
+   "scout_route": 59,
+   "outranked": 47,
+   "collateral_ban": 30,
+   "scout_rule:R1": 15,
+   "not_improving": 1,
+   "scout_rule:R4": 1
+  },
+  "unserved_points": {
+   "scout_route": 3065.0,
+   "outranked": 2584.0,
+   "collateral_ban": 1978.0,
+   "scout_rule:R1": 712.0,
+   "not_improving": 52.0,
+   "scout_rule:R4": 43.0
+  }
+ },
+ "levels": {
+  "L1": {
+   "cases": 3,
+   "compared": 3,
+   "baseline_score": 359.14945284982684,
+   "search_score": 372.99368004790983,
+   "improvement": 13.84422719808299,
+   "improvement_pct": 3.854725961081097,
+   "wins": 3,
+   "ties": 0,
+   "losses": 0,
+   "search_valid": 3,
+   "search_failures": 0,
+   "baseline_failures": 0,
+   "setup_failures": 0,
+   "search_timeouts": 0,
+   "baseline_timeouts": 0,
+   "median_search_seconds": 2.3236881670000002,
+   "max_search_seconds": 3.433475291999912,
+   "total_baseline_seconds": 0.11665587499965113,
+   "total_search_seconds": 7.350704958999813,
+   "passes": [
+    667,
+    507,
+    534
+   ],
+   "unserved": {
+    "outranked": 2,
+    "collateral_ban": 1
+   },
+   "unserved_points": {
+    "outranked": 142.0,
+    "collateral_ban": 50.0
+   }
+  },
+  "L2": {
+   "cases": 3,
+   "compared": 3,
+   "baseline_score": 726.2959319336179,
+   "search_score": 821.9428655240592,
+   "improvement": 95.64693359044134,
+   "improvement_pct": 13.169140757239335,
+   "wins": 3,
+   "ties": 0,
+   "losses": 0,
+   "search_valid": 3,
+   "search_failures": 0,
+   "baseline_failures": 0,
+   "setup_failures": 0,
+   "search_timeouts": 0,
+   "baseline_timeouts": 0,
+   "median_search_seconds": 6.6615170000000035,
+   "max_search_seconds": 9.938056917000267,
+   "total_baseline_seconds": 0.15758054200068727,
+   "total_search_seconds": 22.990629708000597,
+   "passes": [
+    160,
+    186,
+    178
+   ],
+   "unserved": {
+    "outranked": 4,
+    "collateral_ban": 1
+   },
+   "unserved_points": {
+    "outranked": 253.0,
+    "collateral_ban": 88.0
+   }
+  },
+  "L3": {
+   "cases": 3,
+   "compared": 3,
+   "baseline_score": 1194.688112822511,
+   "search_score": 1544.801339639852,
+   "improvement": 350.113226817341,
+   "improvement_pct": 29.305826605253554,
+   "wins": 3,
+   "ties": 0,
+   "losses": 0,
+   "search_valid": 3,
+   "search_failures": 0,
+   "baseline_failures": 0,
+   "setup_failures": 0,
+   "search_timeouts": 0,
+   "baseline_timeouts": 0,
+   "median_search_seconds": 29.739074957999946,
+   "max_search_seconds": 45.04049566699996,
+   "total_baseline_seconds": 1.7165514990001611,
+   "total_search_seconds": 100.70158479099973,
+   "passes": [
+    71,
+    62,
+    84
+   ],
+   "unserved": {
+    "collateral_ban": 9,
+    "outranked": 3,
+    "not_improving": 1
+   },
+   "unserved_points": {
+    "collateral_ban": 593.0,
+    "outranked": 171.0,
+    "not_improving": 52.0
+   }
+  },
+  "L4": {
+   "cases": 3,
+   "compared": 3,
+   "baseline_score": 1921.6336333100007,
+   "search_score": 2883.9313075862574,
+   "improvement": 962.2976742762567,
+   "improvement_pct": 50.077062432483835,
+   "wins": 3,
+   "ties": 0,
+   "losses": 0,
+   "search_valid": 3,
+   "search_failures": 0,
+   "baseline_failures": 0,
+   "setup_failures": 0,
+   "search_timeouts": 0,
+   "baseline_timeouts": 0,
+   "median_search_seconds": 45.10575462499992,
+   "max_search_seconds": 45.109186000000136,
+   "total_baseline_seconds": 4.1819700010000815,
+   "total_search_seconds": 135.2881650420004,
+   "passes": [
+    34,
+    33,
+    40
+   ],
+   "unserved": {
+    "scout_route": 59,
+    "outranked": 38,
+    "collateral_ban": 19,
+    "scout_rule:R1": 15,
+    "scout_rule:R4": 1
+   },
+   "unserved_points": {
+    "scout_route": 3065.0,
+    "outranked": 2018.0,
+    "collateral_ban": 1247.0,
+    "scout_rule:R1": 712.0,
+    "scout_rule:R4": 43.0
+   }
+  }
+ }
+}

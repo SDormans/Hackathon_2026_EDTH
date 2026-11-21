@@ -1,0 +1,31 @@
+Benchmark: 12 cases, 1 worker(s), 45s search / 60s process limit
+Report: output/benchmarks/s15-alns-45s/report.html
+ Done  Scenario      Greedy        Ours        Gain     Gain %   Our s  Greedy / our status
+  1/12  L1:15          99.35      102.30       +2.95     +3.0%   45.06  ok / ok
+  2/12  L1:16         122.38      128.44       +6.06     +5.0%   45.03  ok / ok
+  3/12  L1:17         137.43      144.26       +6.83     +5.0%   45.04  ok / ok
+  4/12  L2:15         292.56      309.72      +17.15     +5.9%   45.04  ok / ok
+  5/12  L2:16         222.15      253.07      +30.92    +13.9%   45.06  ok / ok
+  6/12  L2:17         211.58      269.26      +57.67    +27.3%   45.08  ok / ok
+  7/12  L3:15         430.43      585.63     +155.20    +36.1%   45.06  ok / ok
+  8/12  L3:16         371.39      473.35     +101.97    +27.5%   45.09  ok / ok
+  9/12  L3:17         392.87      488.71      +95.84    +24.4%   45.06  ok / ok
+ 10/12  L4:15         727.71     1000.14     +272.42    +37.4%   45.12  ok / ok
+ 11/12  L4:16         588.07     1002.91     +414.84    +70.5%   45.13  ok / ok
+ 12/12  L4:17         605.85      677.60      +71.75    +11.8%   45.05  ok / ok
+
+ Score summary (sum of raw scores)
+ TOTAL greedy    4201.77  ours    5435.37  gain   +1233.60 (+29.4%)  W/T/L 12/0/0  valid 12/12
+ L1    greedy     359.15  ours     374.99  gain     +15.84 (+4.4%)  W/T/L 3/0/0  valid 3/3
+ L2    greedy     726.30  ours     832.04  gain    +105.75 (+14.6%)  W/T/L 3/0/0  valid 3/3
+ L3    greedy    1194.69  ours    1547.69  gain    +353.00 (+29.5%)  W/T/L 3/0/0  valid 3/3
+ L4    greedy    1921.63  ours    2680.64  gain    +759.01 (+39.5%)  W/T/L 3/0/0  valid 3/3
+
+ Unserved contacts in our plans (count, points lost)
+ TOTAL scout_route 64 (3305), outranked 43 (2544), collateral_ban 30 (1978), scout_rule:R1 19 (917), not_improving 1 (52), no_team 1 (43)
+ L1    outranked 2 (142), collateral_ban 1 (50)
+ L2    outranked 3 (210), collateral_ban 1 (88), no_team 1 (43)
+ L3    collateral_ban 9 (593), outranked 2 (119), scout_route 1 (52), not_improving 1 (52)
+ L4    scout_route 63 (3253), outranked 36 (2073), collateral_ban 19 (1247), scout_rule:R1 19 (917)
+ Failures: ours 0, greedy 0, setup 0
+Report: output/benchmarks/s15-alns-45s/report.html

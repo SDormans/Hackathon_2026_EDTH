@@ -1,0 +1,1053 @@
+[
+ {
+  "case": "L1:15",
+  "level": "L1",
+  "seed": 15,
+  "folder": "L1-15",
+  "generation_status": "ok",
+  "generation_seconds": 0.002240583000002516,
+  "generation_note": "",
+  "diagnostics": {
+   "passes": 667,
+   "candidate_checks": 24470,
+   "rejections": {
+    "R4": 1401,
+    "R8": 1554,
+    "R1": 1011
+   },
+   "unserved": {
+    "collateral_ban": 1
+   },
+   "unserved_points": {
+    "collateral_ban": 50.0
+   }
+  },
+  "baseline": {
+   "status": "ok",
+   "score": 99.34701376731951,
+   "seconds": 0.040373374999944645,
+   "served": [
+    "C02",
+    "C03",
+    "C04"
+   ],
+   "note": "",
+   "returncode": 0
+  },
+  "search": {
+   "status": "ok",
+   "score": 101.61762345289074,
+   "seconds": 1.5935414999999011,
+   "served": [
+    "C02",
+    "C03",
+    "C04"
+   ],
+   "note": "",
+   "returncode": 0
+  },
+  "baseline_score": 99.34701376731951,
+  "baseline_seconds": 0.040373374999944645,
+  "search_score": 101.61762345289074,
+  "search_seconds": 1.5935414999999011,
+  "improvement": 2.2706096855712303,
+  "served": [
+   "C02",
+   "C03",
+   "C04"
+  ]
+ },
+ {
+  "case": "L1:16",
+  "level": "L1",
+  "seed": 16,
+  "folder": "L1-16",
+  "generation_status": "ok",
+  "generation_seconds": 0.0012527500002761371,
+  "generation_note": "",
+  "diagnostics": {
+   "passes": 507,
+   "candidate_checks": 45098,
+   "rejections": {
+    "R8": 19393,
+    "R4": 2181
+   },
+   "unserved": {
+    "outranked": 1
+   },
+   "unserved_points": {
+    "outranked": 77.0
+   }
+  },
+  "baseline": {
+   "status": "ok",
+   "score": 122.37718787808791,
+   "seconds": 0.04017341599956126,
+   "served": [
+    "C01",
+    "C03",
+    "C04"
+   ],
+   "note": "",
+   "returncode": 0
+  },
+  "search": {
+   "status": "ok",
+   "score": 127.07307824507541,
+   "seconds": 3.433475291999912,
+   "served": [
+    "C01",
+    "C03",
+    "C04"
+   ],
+   "note": "",
+   "returncode": 0
+  },
+  "baseline_score": 122.37718787808791,
+  "baseline_seconds": 0.04017341599956126,
+  "search_score": 127.07307824507541,
+  "search_seconds": 3.433475291999912,
+  "improvement": 4.6958903669874985,
+  "served": [
+   "C01",
+   "C03",
+   "C04"
+  ]
+ },
+ {
+  "case": "L1:17",
+  "level": "L1",
+  "seed": 17,
+  "folder": "L1-17",
+  "generation_status": "ok",
+  "generation_seconds": 0.0024125830000230053,
+  "generation_note": "",
+  "diagnostics": {
+   "passes": 534,
+   "candidate_checks": 34757,
+   "rejections": {
+    "R8": 7759,
+    "R4": 7721
+   },
+   "unserved": {
+    "outranked": 1
+   },
+   "unserved_points": {
+    "outranked": 65.0
+   }
+  },
+  "baseline": {
+   "status": "ok",
+   "score": 137.42525120441945,
+   "seconds": 0.03610908400014523,
+   "served": [
+    "C02",
+    "C03",
+    "C04"
+   ],
+   "note": "",
+   "returncode": 0
+  },
+  "search": {
+   "status": "ok",
+   "score": 144.30297834994371,
+   "seconds": 2.3236881670000002,
+   "served": [
+    "C02",
+    "C03",
+    "C04"
+   ],
+   "note": "",
+   "returncode": 0
+  },
+  "baseline_score": 137.42525120441945,
+  "baseline_seconds": 0.03610908400014523,
+  "search_score": 144.30297834994371,
+  "search_seconds": 2.3236881670000002,
+  "improvement": 6.877727145524261,
+  "served": [
+   "C02",
+   "C03",
+   "C04"
+  ]
+ },
+ {
+  "case": "L2:15",
+  "level": "L2",
+  "seed": 15,
+  "folder": "L2-15",
+  "generation_status": "ok",
+  "generation_seconds": 0.0025393330001861614,
+  "generation_note": "",
+  "diagnostics": {
+   "passes": 160,
+   "candidate_checks": 64046,
+   "rejections": {
+    "R8": 18912,
+    "R3": 8525,
+    "R4": 11293
+   },
+   "unserved": {
+    "outranked": 1
+   },
+   "unserved_points": {
+    "outranked": 43.0
+   }
+  },
+  "baseline": {
+   "status": "ok",
+   "score": 292.5633764044163,
+   "seconds": 0.07711866600038775,
+   "served": [
+    "C01",
+    "C02",
+    "C03",
+    "C05",
+    "C06",
+    "C07",
+    "C08",
+    "C09"
+   ],
+   "note": "",
+   "returncode": 0
+  },
+  "search": {
+   "status": "ok",
+   "score": 302.63938111515034,
+   "seconds": 6.391055791000326,
+   "served": [
+    "C01",
+    "C02",
+    "C03",
+    "C05",
+    "C06",
+    "C07",
+    "C08",
+    "C09"
+   ],
+   "note": "",
+   "returncode": 0
+  },
+  "baseline_score": 292.5633764044163,
+  "baseline_seconds": 0.07711866600038775,
+  "search_score": 302.63938111515034,
+  "search_seconds": 6.391055791000326,
+  "improvement": 10.076004710734026,
+  "served": [
+   "C01",
+   "C02",
+   "C03",
+   "C05",
+   "C06",
+   "C07",
+   "C08",
+   "C09"
+  ]
+ },
+ {
+  "case": "L2:16",
+  "level": "L2",
+  "seed": 16,
+  "folder": "L2-16",
+  "generation_status": "ok",
+  "generation_seconds": 0.0036712080000143033,
+  "generation_note": "",
+  "diagnostics": {
+   "passes": 186,
+   "candidate_checks": 91538,
+   "rejections": {
+    "R8": 59344,
+    "R4": 9417,
+    "R3": 272,
+    "R1": 13
+   },
+   "unserved": {
+    "collateral_ban": 1,
+    "outranked": 1
+   },
+   "unserved_points": {
+    "collateral_ban": 88.0,
+    "outranked": 49.0
+   }
+  },
+  "baseline": {
+   "status": "ok",
+   "score": 222.14953605256858,
+   "seconds": 0.04025545900003635,
+   "served": [
+    "C03",
+    "C04",
+    "C05",
+    "C06",
+    "C07",
+    "C08",
+    "C09"
+   ],
+   "note": "",
+   "returncode": 0
+  },
+  "search": {
+   "status": "ok",
+   "score": 250.53016281790315,
+   "seconds": 9.938056917000267,
+   "served": [
+    "C01",
+    "C03",
+    "C04",
+    "C05",
+    "C07",
+    "C08",
+    "C09"
+   ],
+   "note": "",
+   "returncode": 0
+  },
+  "baseline_score": 222.14953605256858,
+  "baseline_seconds": 0.04025545900003635,
+  "search_score": 250.53016281790315,
+  "search_seconds": 9.938056917000267,
+  "improvement": 28.38062676533457,
+  "served": [
+   "C01",
+   "C03",
+   "C04",
+   "C05",
+   "C07",
+   "C08",
+   "C09"
+  ]
+ },
+ {
+  "case": "L2:17",
+  "level": "L2",
+  "seed": 17,
+  "folder": "L2-17",
+  "generation_status": "ok",
+  "generation_seconds": 0.003842374999749154,
+  "generation_note": "",
+  "diagnostics": {
+   "passes": 178,
+   "candidate_checks": 64423,
+   "rejections": {
+    "R8": 35215,
+    "R4": 6494,
+    "R3": 120
+   },
+   "unserved": {
+    "outranked": 2
+   },
+   "unserved_points": {
+    "outranked": 161.0
+   }
+  },
+  "baseline": {
+   "status": "ok",
+   "score": 211.583019476633,
+   "seconds": 0.04020641700026317,
+   "served": [
+    "C02",
+    "C03",
+    "C04",
+    "C06",
+    "C07",
+    "C09"
+   ],
+   "note": "",
+   "returncode": 0
+  },
+  "search": {
+   "status": "ok",
+   "score": 268.7733215910058,
+   "seconds": 6.6615170000000035,
+   "served": [
+    "C01",
+    "C02",
+    "C05",
+    "C06",
+    "C07",
+    "C08",
+    "C09"
+   ],
+   "note": "",
+   "returncode": 0
+  },
+  "baseline_score": 211.583019476633,
+  "baseline_seconds": 0.04020641700026317,
+  "search_score": 268.7733215910058,
+  "search_seconds": 6.6615170000000035,
+  "improvement": 57.1903021143728,
+  "served": [
+   "C01",
+   "C02",
+   "C05",
+   "C06",
+   "C07",
+   "C08",
+   "C09"
+  ]
+ },
+ {
+  "case": "L3:15",
+  "level": "L3",
+  "seed": 15,
+  "folder": "L3-15",
+  "generation_status": "ok",
+  "generation_seconds": 0.21492674999990413,
+  "generation_note": "",
+  "diagnostics": {
+   "passes": 71,
+   "candidate_checks": 155648,
+   "rejections": {
+    "R8": 63105,
+    "R4": 50959,
+    "R3": 5099,
+    "R1": 1376,
+    "R6": 1
+   },
+   "unserved": {
+    "outranked": 2,
+    "collateral_ban": 1
+   },
+   "unserved_points": {
+    "outranked": 98.0,
+    "collateral_ban": 72.0
+   }
+  },
+  "baseline": {
+   "status": "ok",
+   "score": 430.43491830185746,
+   "seconds": 0.3520422910000889,
+   "served": [
+    "C01",
+    "C04",
+    "C05",
+    "C06",
+    "C07",
+    "C09",
+    "C11",
+    "C12",
+    "C13",
+    "C15",
+    "C16",
+    "C19",
+    "C20"
+   ],
+   "note": "",
+   "returncode": 0
+  },
+  "search": {
+   "status": "ok",
+   "score": 584.2680816080834,
+   "seconds": 25.922014165999826,
+   "served": [
+    "C01",
+    "C02",
+    "C03",
+    "C04",
+    "C05",
+    "C06",
+    "C07",
+    "C09",
+    "C11",
+    "C12",
+    "C13",
+    "C15",
+    "C16",
+    "C17",
+    "C18",
+    "C19",
+    "C20"
+   ],
+   "note": "",
+   "returncode": 0
+  },
+  "baseline_score": 430.43491830185746,
+  "baseline_seconds": 0.3520422910000889,
+  "search_score": 584.2680816080834,
+  "search_seconds": 25.922014165999826,
+  "improvement": 153.83316330622597,
+  "served": [
+   "C01",
+   "C02",
+   "C03",
+   "C04",
+   "C05",
+   "C06",
+   "C07",
+   "C09",
+   "C11",
+   "C12",
+   "C13",
+   "C15",
+   "C16",
+   "C17",
+   "C18",
+   "C19",
+   "C20"
+  ]
+ },
+ {
+  "case": "L3:16",
+  "level": "L3",
+  "seed": 16,
+  "folder": "L3-16",
+  "generation_status": "ok",
+  "generation_seconds": 0.07717691699963325,
+  "generation_note": "",
+  "diagnostics": {
+   "passes": 62,
+   "candidate_checks": 210294,
+   "rejections": {
+    "R7": 2133,
+    "R6": 504,
+    "R8": 136059,
+    "R4": 16941,
+    "R3": 3634,
+    "R1": 1323
+   },
+   "unserved": {
+    "collateral_ban": 4,
+    "not_improving": 1
+   },
+   "unserved_points": {
+    "collateral_ban": 323.0,
+    "not_improving": 52.0
+   }
+  },
+  "baseline": {
+   "status": "ok",
+   "score": 371.3877934015617,
+   "seconds": 1.2322327080000832,
+   "served": [
+    "C02",
+    "C05",
+    "C07",
+    "C08",
+    "C10",
+    "C11",
+    "C13",
+    "C14",
+    "C17",
+    "C20"
+   ],
+   "note": "",
+   "returncode": 0
+  },
+  "search": {
+   "status": "ok",
+   "score": 472.2408426141708,
+   "seconds": 45.04049566699996,
+   "served": [
+    "C01",
+    "C02",
+    "C05",
+    "C07",
+    "C08",
+    "C10",
+    "C11",
+    "C13",
+    "C14",
+    "C15",
+    "C16",
+    "C17",
+    "C18",
+    "C19",
+    "C20"
+   ],
+   "note": "",
+   "returncode": 0
+  },
+  "baseline_score": 371.3877934015617,
+  "baseline_seconds": 1.2322327080000832,
+  "search_score": 472.2408426141708,
+  "search_seconds": 45.04049566699996,
+  "improvement": 100.85304921260911,
+  "served": [
+   "C01",
+   "C02",
+   "C05",
+   "C07",
+   "C08",
+   "C10",
+   "C11",
+   "C13",
+   "C14",
+   "C15",
+   "C16",
+   "C17",
+   "C18",
+   "C19",
+   "C20"
+  ]
+ },
+ {
+  "case": "L3:17",
+  "level": "L3",
+  "seed": 17,
+  "folder": "L3-17",
+  "generation_status": "ok",
+  "generation_seconds": 0.005383333000281709,
+  "generation_note": "",
+  "diagnostics": {
+   "passes": 84,
+   "candidate_checks": 153128,
+   "rejections": {
+    "R8": 103140,
+    "R1": 2143,
+    "R4": 20770
+   },
+   "unserved": {
+    "collateral_ban": 4,
+    "outranked": 1
+   },
+   "unserved_points": {
+    "collateral_ban": 198.0,
+    "outranked": 73.0
+   }
+  },
+  "baseline": {
+   "status": "ok",
+   "score": 392.86540111909164,
+   "seconds": 0.13227649999998903,
+   "served": [
+    "C01",
+    "C03",
+    "C05",
+    "C08",
+    "C10",
+    "C12",
+    "C13",
+    "C15",
+    "C17",
+    "C18",
+    "C19",
+    "C20"
+   ],
+   "note": "",
+   "returncode": 0
+  },
+  "search": {
+   "status": "ok",
+   "score": 488.29241541759757,
+   "seconds": 29.739074957999946,
+   "served": [
+    "C02",
+    "C03",
+    "C04",
+    "C05",
+    "C08",
+    "C10",
+    "C12",
+    "C13",
+    "C14",
+    "C15",
+    "C16",
+    "C17",
+    "C18",
+    "C19",
+    "C20"
+   ],
+   "note": "",
+   "returncode": 0
+  },
+  "baseline_score": 392.86540111909164,
+  "baseline_seconds": 0.13227649999998903,
+  "search_score": 488.29241541759757,
+  "search_seconds": 29.739074957999946,
+  "improvement": 95.42701429850592,
+  "served": [
+   "C02",
+   "C03",
+   "C04",
+   "C05",
+   "C08",
+   "C10",
+   "C12",
+   "C13",
+   "C14",
+   "C15",
+   "C16",
+   "C17",
+   "C18",
+   "C19",
+   "C20"
+  ]
+ },
+ {
+  "case": "L4:15",
+  "level": "L4",
+  "seed": 15,
+  "folder": "L4-15",
+  "generation_status": "ok",
+  "generation_seconds": 0.006416541999897163,
+  "generation_note": "",
+  "diagnostics": {
+   "passes": 34,
+   "candidate_checks": 330598,
+   "rejections": {
+    "R8": 51597,
+    "R4": 48058,
+    "R1": 165646,
+    "R3": 48196,
+    "R7": 135,
+    "R6": 567
+   },
+   "unserved": {
+    "scout_route": 19,
+    "outranked": 12,
+    "scout_rule:R1": 9,
+    "collateral_ban": 4
+   },
+   "unserved_points": {
+    "scout_route": 972.0,
+    "outranked": 625.0,
+    "scout_rule:R1": 413.0,
+    "collateral_ban": 277.0
+   }
+  },
+  "baseline": {
+   "status": "ok",
+   "score": 727.7144922085098,
+   "seconds": 1.5621077920000062,
+   "served": [
+    "C01",
+    "C07",
+    "C09",
+    "C13",
+    "C16",
+    "C17",
+    "C20",
+    "C23",
+    "C29",
+    "C33",
+    "C35",
+    "C37",
+    "C44",
+    "C55",
+    "C61",
+    "C67",
+    "C70"
+   ],
+   "note": "",
+   "returncode": 0
+  },
+  "search": {
+   "status": "ok",
+   "score": 1063.5924231226618,
+   "seconds": 45.10575462499992,
+   "served": [
+    "C01",
+    "C04",
+    "C06",
+    "C07",
+    "C12",
+    "C13",
+    "C16",
+    "C17",
+    "C20",
+    "C23",
+    "C29",
+    "C32",
+    "C33",
+    "C35",
+    "C36",
+    "C37",
+    "C44",
+    "C49",
+    "C55",
+    "C57",
+    "C60",
+    "C62",
+    "C67",
+    "C68",
+    "C69",
+    "C70"
+   ],
+   "note": "",
+   "returncode": 0
+  },
+  "baseline_score": 727.7144922085098,
+  "baseline_seconds": 1.5621077920000062,
+  "search_score": 1063.5924231226618,
+  "search_seconds": 45.10575462499992,
+  "improvement": 335.877930914152,
+  "served": [
+   "C01",
+   "C04",
+   "C06",
+   "C07",
+   "C12",
+   "C13",
+   "C16",
+   "C17",
+   "C20",
+   "C23",
+   "C29",
+   "C32",
+   "C33",
+   "C35",
+   "C36",
+   "C37",
+   "C44",
+   "C49",
+   "C55",
+   "C57",
+   "C60",
+   "C62",
+   "C67",
+   "C68",
+   "C69",
+   "C70"
+  ]
+ },
+ {
+  "case": "L4:16",
+  "level": "L4",
+  "seed": 16,
+  "folder": "L4-16",
+  "generation_status": "ok",
+  "generation_seconds": 0.25323179099996196,
+  "generation_note": "",
+  "diagnostics": {
+   "passes": 33,
+   "candidate_checks": 142315,
+   "rejections": {
+    "R8": 55244,
+    "R6": 579,
+    "R3": 12063,
+    "R7": 255,
+    "R4": 19011,
+    "R1": 35509
+   },
+   "unserved": {
+    "scout_route": 22,
+    "collateral_ban": 8,
+    "outranked": 5,
+    "scout_rule:R1": 3,
+    "scout_rule:R4": 1
+   },
+   "unserved_points": {
+    "scout_route": 1128.0,
+    "collateral_ban": 512.0,
+    "outranked": 234.0,
+    "scout_rule:R1": 149.0,
+    "scout_rule:R4": 43.0
+   }
+  },
+  "baseline": {
+   "status": "ok",
+   "score": 588.0676431185565,
+   "seconds": 1.387369624999792,
+   "served": [
+    "C01",
+    "C02",
+    "C05",
+    "C16",
+    "C17",
+    "C20",
+    "C23",
+    "C25",
+    "C32",
+    "C34",
+    "C46",
+    "C47",
+    "C53",
+    "C62"
+   ],
+   "note": "",
+   "returncode": 0
+  },
+  "search": {
+   "status": "ok",
+   "score": 1023.3408078823518,
+   "seconds": 45.109186000000136,
+   "served": [
+    "C01",
+    "C02",
+    "C05",
+    "C10",
+    "C14",
+    "C16",
+    "C17",
+    "C20",
+    "C22",
+    "C23",
+    "C25",
+    "C28",
+    "C32",
+    "C34",
+    "C38",
+    "C40",
+    "C41",
+    "C44",
+    "C46",
+    "C47",
+    "C49",
+    "C53",
+    "C55",
+    "C56",
+    "C57",
+    "C61",
+    "C62",
+    "C64",
+    "C67",
+    "C69",
+    "C70"
+   ],
+   "note": "",
+   "returncode": 0
+  },
+  "baseline_score": 588.0676431185565,
+  "baseline_seconds": 1.387369624999792,
+  "search_score": 1023.3408078823518,
+  "search_seconds": 45.109186000000136,
+  "improvement": 435.2731647637953,
+  "served": [
+   "C01",
+   "C02",
+   "C05",
+   "C10",
+   "C14",
+   "C16",
+   "C17",
+   "C20",
+   "C22",
+   "C23",
+   "C25",
+   "C28",
+   "C32",
+   "C34",
+   "C38",
+   "C40",
+   "C41",
+   "C44",
+   "C46",
+   "C47",
+   "C49",
+   "C53",
+   "C55",
+   "C56",
+   "C57",
+   "C61",
+   "C62",
+   "C64",
+   "C67",
+   "C69",
+   "C70"
+  ]
+ },
+ {
+  "case": "L4:17",
+  "level": "L4",
+  "seed": 17,
+  "folder": "L4-17",
+  "generation_status": "ok",
+  "generation_seconds": 0.005466416000217578,
+  "generation_note": "",
+  "diagnostics": {
+   "passes": 40,
+   "candidate_checks": 418756,
+   "rejections": {
+    "R8": 47746,
+    "R1": 286847,
+    "R4": 6357,
+    "R3": 60681
+   },
+   "unserved": {
+    "outranked": 21,
+    "scout_route": 18,
+    "collateral_ban": 7,
+    "scout_rule:R1": 3
+   },
+   "unserved_points": {
+    "outranked": 1159.0,
+    "scout_route": 965.0,
+    "collateral_ban": 458.0,
+    "scout_rule:R1": 150.0
+   }
+  },
+  "baseline": {
+   "status": "ok",
+   "score": 605.8514979829343,
+   "seconds": 1.2324925840002834,
+   "served": [
+    "C02",
+    "C03",
+    "C07",
+    "C08",
+    "C11",
+    "C20",
+    "C33",
+    "C37",
+    "C43",
+    "C49",
+    "C50",
+    "C51",
+    "C53",
+    "C62",
+    "C66",
+    "C68"
+   ],
+   "note": "",
+   "returncode": 0
+  },
+  "search": {
+   "status": "ok",
+   "score": 796.9980765812438,
+   "seconds": 45.07322441700035,
+   "served": [
+    "C03",
+    "C06",
+    "C07",
+    "C08",
+    "C11",
+    "C20",
+    "C32",
+    "C33",
+    "C37",
+    "C43",
+    "C46",
+    "C47",
+    "C48",
+    "C49",
+    "C50",
+    "C51",
+    "C53",
+    "C58",
+    "C62",
+    "C66",
+    "C68"
+   ],
+   "note": "",
+   "returncode": 0
+  },
+  "baseline_score": 605.8514979829343,
+  "baseline_seconds": 1.2324925840002834,
+  "search_score": 796.9980765812438,
+  "search_seconds": 45.07322441700035,
+  "improvement": 191.14657859830947,
+  "served": [
+   "C03",
+   "C06",
+   "C07",
+   "C08",
+   "C11",
+   "C20",
+   "C32",
+   "C33",
+   "C37",
+   "C43",
+   "C46",
+   "C47",
+   "C48",
+   "C49",
+   "C50",
+   "C51",
+   "C53",
+   "C58",
+   "C62",
+   "C66",
+   "C68"
+  ]
+ }
+]
