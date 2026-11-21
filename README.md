@@ -52,6 +52,8 @@ Each node holds routes, scout tasks, consumed effectors and a score. At each con
 - `search_planner.py` first follows the original greedy choices with faster validation, for up to a quarter of the budget (capped at 10 seconds). If interrupted, it retains the last accepted plan. It then searches beams using scarcity/value, window-close, points and seeded randomised orders.
 - Every extension applies the official local rules to changed routes, rechecks confirmation and strike completeness globally, and checks separation between changed routes and all other routes. Unchanged pairs retain their parent's validation result. Energy and separation flight pieces are cached per branch.
 - The beam keeps at most `--beam-width` distinct states at a depth. A separate archive keeps up to `--top-n` distinct valid plans across the entire search. The two settings are independent. Distinct means different assignments or timed waypoints, so solutions may serve the same contacts.
+- The search stops a short reserve (at most 3 seconds) before the deadline to **repair** the best archived plans: unserved unknowns, then hostiles, are inserted at the cheapest tour position of any scout (ranked by added distance), with the free effectors. Each repaired plan is recorded and archived; searching resumes if time remains.
+- Route builders reuse memoised zone detours, and candidates whose waypoints fall outside the horizon or a contact's window are rejected before parsing. Duplicate plans are detected from per-route waypoint tuples.
 - Expansion has local time caps, preventing an impossible contact from consuming the whole run. Children must improve the parent's actual score. All archive winners receive a full official validation and score before export; final validation stops starting new calls at 58 seconds. The valid empty plan is the last fallback.
 
 The result is the best N plans **found**, not a proof of the global top N. Contact ordering, a bounded beam, fixed flight settings, shortlists and the improving-child restriction can all discard useful alternatives. The trace records accepted nodes and skip branches; failed route attempts are aggregated by rule, rather than stored individually. Trace growth is capped between passes to keep tiny scenarios from producing unlimited diagnostics.
@@ -114,6 +116,18 @@ The slowest candidate run finished in 55.23 seconds. Parallel CPU contention can
 ```sh
 python3 analysis/benchmark_search.py --levels L1,L2,L3,L4 --seeds 0-2 --workers 4 --seconds 55
 ```
+
+### Repair and cheaper checks
+
+Same inputs, master vs this change, both with two concurrent benchmark workers per batch running at the same time:
+
+| Batch | Master | With repair | Change |
+|---|---:|---:|---:|
+| 8 public validation scenarios, 55 s | 3768.65 | 3790.20 | +0.6% |
+| L1–L4 seeds 3–4, 55 s | 3164.20 | 3190.15 | +0.8% |
+| L1–L4 seeds 0–2, 20 s (four workers, run separately) | 4417.21 | 4514.93 | +2.2% |
+
+All plans were valid. Gains come from L4 (e.g. L4-401 1077.92 → 1118.71, L4-0 at 20 s 834.78 → 861.03); L1–L3 mostly tie but finish sooner. L4-402 regressed (613.23 → 593.99) and L4-2 at 20 s slightly (447.65 → 446.43): faster checks change which branches fit in the local time caps, so individual cases vary.
 
 ### Local benchmark results
 

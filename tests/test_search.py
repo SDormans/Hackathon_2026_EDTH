@@ -17,6 +17,7 @@ sys.path.insert(0, str(ROOT))
 # Entry point also supplies the local fleetkit discovery used by these tests.
 import planner
 from candidate_matrix import CandidateMatrix
+import search_planner
 from search_planner import IncrementalValidator, Search, unserved_reason
 from fleetkit.baseline import greedy_plan
 from fleetkit.generator import generate
@@ -89,6 +90,30 @@ class IncrementalTests(unittest.TestCase):
             if actual is not None:
                 self.assertAlmostEqual(actual.score, official.score)
 
+    def test_cached_detour_matches_official(self):
+        sc = Scenario.from_dict(generate('L3', 1))
+        rng = random.Random(3)
+        for _ in range(200):
+            pts = [(rng.uniform(-500, 6000), rng.uniform(-500, 6000), rng.choice([40.0, 70.0, 130.0]))
+                   for _ in range(2)]
+            expected = search_planner._official_detour(list(pts), sc)
+            self.assertEqual(search_planner._cached_detour(list(pts), sc), expected)
+            self.assertEqual(search_planner._cached_detour(list(pts), sc), expected)
+
+    def test_quick_reject_matches_full_validator(self):
+        search, checker = self.checker()
+        aid = next(iter(self.routes))
+        for field, shift in (('t', -10000.0), ('t', 10000.0)):
+            route = copy.deepcopy(self.routes[aid])
+            for wp in route:
+                wp[field] += shift
+            rule = checker.quick_reject({aid: route})
+            self.assertIsNotNone(rule)
+            checker.last_rule = None
+            self.assertIsNone(checker.extend(search.root, {aid: route}))
+            self.assertEqual(checker.last_rule, rule)
+        self.assertIsNone(checker.quick_reject(self.routes))
+
     def test_rebuilt_scout_must_keep_previous_confirmations(self):
         search, checker = self.checker()
         parent = checker.extend(search.root, self.routes)
@@ -109,6 +134,19 @@ class IncrementalTests(unittest.TestCase):
         parent = checker.extend(search.root, self.routes)
         self.assertIsNone(checker.extend(parent, {'duplicate-scout': self.routes[aid]}))
         self.assertIn('R8', checker.rejections)
+
+    def test_signature_identifies_routes(self):
+        search, checker = self.checker()
+        a = checker.extend(search.root, self.routes)
+        b = checker.extend(search.root, copy.deepcopy(self.routes))
+        self.assertEqual(a.signature(), b.signature())
+        aid = next(iter(self.routes))
+        route = copy.deepcopy(self.routes[aid])
+        route[-1]['t'] += 1.0
+        c = checker.extend(a, {aid: route})
+        if c is not None:
+            self.assertNotEqual(a.signature(), c.signature())
+        self.assertNotEqual(search.root.signature(), a.signature())
 
     def test_branches_do_not_mutate_parent(self):
         search, checker = self.checker()
@@ -148,6 +186,22 @@ class SearchTests(unittest.TestCase):
                             for n in search.trace if isinstance(n['decision'], dict)))
         for n in search.trace[1:]:
             self.assertLess(n['parent'], n['id'])
+
+    def test_repair_adds_unserved_unknown(self):
+        sc = scenario()
+        plan = greedy_plan(sc)
+        sc.contacts.append(replace(sc.contacts[1], id='U', cls='unknown', points=30,
+                                   needs={}, pos=(900.0, 200.0, 0.0)))
+        search = Search(sc, seconds=5)
+        search.matrix = CandidateMatrix(sc)
+        state = search.checker.extend(search.root, {r['aircraft']: r['waypoints'] for r in plan['routes']})
+        self.assertNotIn('U', state.served)
+        repaired = search.repair(state, 0)
+        self.assertIn('U', repaired.served)
+        self.assertGreater(repaired.score, state.score)
+        result = evaluate(sc, repaired.plan(sc.seed))
+        self.assertTrue(result.valid)
+        self.assertAlmostEqual(result.score, repaired.score)
 
     def test_expired_budget_returns_valid_empty_plan(self):
         sc = scenario()
