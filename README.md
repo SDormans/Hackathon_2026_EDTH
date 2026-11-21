@@ -226,6 +226,27 @@ Scout failures account for 73 contacts and 3,756 points. A direct-flight check (
 
 A generated L2-7 demo is available locally at `output/search/tree.html`, with its winning fleet animation at `output/flight.html`. Generated outputs are ignored by Git; use `--artifacts` to reproduce them.
 
+### Where the L2/L3 gap to the board leader comes from
+
+Board (sum per level): leader L2 562, L3 1587; us at 035a098 L2 ~547, L3 ~1552. Every non-banned unknown is served on all five L2/L3 board scenarios. The hostile set is the knapsack optimum over the light/heavy supply, and effector assignment is within 1 point of the optimal matching (straight-line energy). **The gap is energy only**, in two parts:
+
+1. **Effector climb** (fixed: `GROUND_STRIKES`). R2 bounds the altitude only of waypoints after the first and before the last, so a two-waypoint effector route (home → engagement at the contact, R_eng 3D) can fly at z = 0. That avoids e_climb × 30 m per effector, worth 5–19 Wh per L3 scenario before the fix. Members whose straight ground line enters a zone or protected area fly the 30 m route.
+2. **Scout tours** (partly fixed: `SCOUT_ENERGY_RANK`). Scouts differ by about ±30 % in energy per metre (L2-202: S01 7.9 J/m, S02/S03 10.4–10.7), but candidate scouts were ranked by added *distance*, so the cheapest scout was often left idle. Our scouts flew 24–29 km per L3 scenario. One tour through all observation disks without windows is 12–13 km. An offline VRPTW estimate (windows, R4 deadlines, horizon, battery) gives 51–69 Wh against our 71–82 Wh under the same model.
+
+Hand-built plans that use the planner's own builders (VRPTW tours, strikes re-timed, official scorer) score L2-201 295.87, L2-202 266.06 (one scout instead of two), L3-301 715.06, L3-302 418.77 (two scouts instead of four) and L3-303 444.72. That is **L2 561.9** (leader 562) and **L3 1578.6** (leader 1587), so these two causes account for nearly the whole gap. What remains is scout tour construction: fewer and better-chosen scouts per scenario.
+
+Benchmark, same run, four workers, 45 s, all plans valid:
+
+| Batch | 035a098 | + ground strikes | + energy-ranked scouts |
+|---|---:|---:|---:|
+| 17 cases (board-8, L4 9–14, L3 3–5) | 13745.67 | 13826.45 | **13928.02** (+1.3 %; 14 W / 3 L) |
+| board-8 | 4787.92 | 4803.09 | 4810.50 |
+| board L2 / L3 | 547.27 / 1543.35 | 549.12 / 1556.95 | 554.69 / 1570.18 |
+| L4 (8 cases) | 9922.37 | 9994.03 | 10052.34 |
+| L3 seeds 3–15 (separate run) | 6594.65 | | 6660.01 (+1.0 %; 12 W / 1 L) |
+
+In an earlier run, ground strikes alone gave 13763.04 → 13874.67 on the 17 cases and 6605.11 → 6647.56 on L3 seeds 3–15. Two changes were tested and dropped: trying the 30 m scout layer first (13816.67 against 13874.67 for ground strikes alone), and an LNS operator that removes a whole tour (no gain on L2-202 or L3-302).
+
 ## Leaderboard submission
 
 `submit_to_board.py` runs the full pipeline in one command: generate the eight public validation scenarios, plan each one, print scores, and submit to the live board.

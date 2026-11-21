@@ -83,6 +83,24 @@ EFFECTOR_CRUISE = 0.995
 EFFECTOR_Z = ((30.0,),) + tuple(tuple(EFFECTOR_LAYERS[(i + r) % len(EFFECTOR_LAYERS)]
                                       for i in range(len(EFFECTOR_LAYERS)))
                                 for r in range(len(EFFECTOR_LAYERS)))
+# Ground-level strikes. R2 bounds the altitude of waypoints after the first and before the
+# last only, and R10 needs the engagement within R_eng (3D) of the contact on the ground,
+# so a two-waypoint effector route (home, engagement) may fly the straight line at z = 0:
+# no climb energy (e_climb x 30 m: 0.3-0.6 Wh per light, 0.9-1.5 Wh per heavy), no climb
+# time and no approach detour. Tried first (layer GROUND_Z, angle 0 only) for every team;
+# a member whose straight ground line enters a zone or protected area (R6) flies the 30 m
+# route instead. Off: the 30 m team first, as before.
+GROUND_STRIKES = True
+GROUND_Z = 0.0
+# Clearance (m) kept from zone and protected-area cylinders by a ground route: waypoints
+# are rounded to 1 mm.
+GROUND_CLEARANCE_M = 1.0
+
+
+def effector_layer_sets():
+    """Layer sets tried for a strike team, in order."""
+    return (((GROUND_Z,),) + EFFECTOR_Z) if GROUND_STRIKES else EFFECTOR_Z
+
 
 _cyl = {}
 
@@ -119,6 +137,13 @@ def effector_route(eff, contact, arrive, z, angle, scenario):
 
     The flight path depends only on (effector, contact, layer, angle); it is built once
     and only the times are placed for each arrival."""
+    if z == GROUND_Z:
+        if angle != 0.0:
+            return None, arrive
+        route = ground_route(eff, contact, arrive, scenario)
+        if route is not None:
+            return route
+        z = 30.0
     if not DIAGONAL_CLIMB:
         return _effector_route(eff, contact, arrive, z, angle, scenario)
     key = (id(scenario), eff.id, contact.id, z, angle, EFFECTOR_CRUISE)
@@ -144,6 +169,29 @@ def effector_route(eff, contact, arrive, z, angle, scenario):
     wps.append(baseline._wp(t_a, a_pt))
     wps.append(baseline._wp(arrive, e_pt, action="engage", target=contact.id))
     return wps, earliest
+
+
+_ground_clear = {}
+
+
+def ground_route(eff, contact, arrive, scenario):
+    """(route, earliest arrival) for the two-waypoint route home -> engagement at the
+    contact, flown at ground level; None when the straight line is not clear (R6)."""
+    key = (id(scenario), eff.id, contact.id)
+    hit = _ground_clear.get(key)
+    if hit is None or hit[0] is not scenario:
+        home, end = eff.home, contact.pos
+        cylinders = baseline._cylinders(scenario)
+        clear = not any(segment_enters_cylinder(home, end, c, r + GROUND_CLEARANCE_M, top)
+                        for c, r, top in cylinders)
+        hit = _ground_clear[key] = (scenario, clear)
+    if not hit[1]:
+        return None
+    earliest = hdist(eff.home, contact.pos) / (EFFECTOR_CRUISE * eff.v_h_mps)
+    if arrive < earliest:
+        return None, earliest
+    return [baseline._wp(arrive - earliest, eff.home),
+            baseline._wp(arrive, contact.pos, action="engage", target=contact.id)], earliest
 
 
 def _effector_shape(eff, contact, z, angle, scenario):
@@ -425,6 +473,19 @@ def takeoff_shift(scenario, aircraft, routes, scout, depart, limit=40.0, step=2.
             return shift
         shift += step
     return 0.0
+
+
+# Rank scouts by added cruise energy (added distance x Wh per metre at the tour speed)
+# instead of added distance. Scout efficiency varies by about +-30% within a scenario
+# (L2-202: 7.9 vs 10.4-10.7 J/m), and ranking by distance alone often leaves the
+# cheapest scout idle; hand-built plans with the efficient scouts score +10 on L2-202.
+SCOUT_ENERGY_RANK = True
+
+
+def scout_wh_per_m(scout):
+    """Cruise energy per metre (Wh) at the speed scout tours fly."""
+    v = eco_speed(scout) if SCOUT_SPEED_MODE == "eco" else fast_speed(scout)
+    return (scout.power.p0_w + scout.power.k_v * v * v) / v / 3600.0
 
 
 # Scout options are ranked and filtered by a straight-leg replay of the whole tour
@@ -1008,6 +1069,8 @@ class Search:
                          - hdist(points[i], points[i + 1]))
                 best = added if best is None else min(best, added)
             if best is not None:
+                if SCOUT_ENERGY_RANK:
+                    best *= scout_wh_per_m(scout)
                 ranked.append((best, scout.id, scout))
         ranked.sort(key=lambda r: r[:2])
         out = [r[2] for r in ranked]
@@ -1160,7 +1223,8 @@ class Search:
             found = False
             spacing = min(5.0, self.sc.rules.sync_window_s / max(1, len(team)-1))
             delays = STRIKE_DELAYS if PAD_TAKEOFFS else (0.0, 8.0, 20.0, 45.0, 90.0)
-            for delay, angle, layers in itertools.product(delays, (0.0, 35.0, -35.0), EFFECTOR_Z):
+            for delay, angle, layers in itertools.product(delays, (0.0, 35.0, -35.0),
+                                                             effector_layer_sets()):
                 self.checker.check_time(stop)
                 arrive = base + delay
                 if arrive + spacing*(len(team)-1) > contact.window[1] + EPS:

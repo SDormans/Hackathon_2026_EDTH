@@ -573,6 +573,100 @@ class ClimbTests(unittest.TestCase):
 
 
 
+class GroundStrikeTests(unittest.TestCase):
+    def plan_with(self, sc, effector_wps, contact, scout):
+        tasks = [{"cid": contact.id, "point": search_planner.obs_point(sc, scout, contact, 0.0, 30.0),
+                  "window": contact.window, "cpos": contact.pos}]
+        tour = scout_tour(sc, scout, tasks, 30.0, depart=0.0)
+        obs_end = next(w['t'] + w['dwell_s'] for w in tour if w.get('action') == 'observe')
+        return tour, obs_end
+
+    def test_ground_route_is_valid_and_cheaper_than_30_m(self):
+        from fleetkit.energy import route_energy_wh
+        from fleetkit.model import parse_plan
+        sc = scenario()
+        scout = next(a for a in sc.aircraft if a.type == 'scout')
+        eff = next(a for a in sc.aircraft if a.subtype == 'light')
+        target = next(c for c in sc.contacts if c.id == 'B')
+        tour, obs_end = self.plan_with(sc, None, target, scout)
+        # After the scout has landed (pads are 60 m apart, in line with the contact).
+        arrive = max(obs_end + 15.0, tour[-1]['t'] + 60.0)
+        ground, earliest = search_planner.effector_route(eff, target, arrive,
+                                                         search_planner.GROUND_Z, 0.0, sc)
+        self.assertEqual(len(ground), 2)
+        self.assertEqual([w['z'] for w in ground], [0.0, 0.0])
+        self.assertEqual(ground[-1]['action'], 'engage')
+        low, _ = search_planner.effector_route(eff, target, arrive, 30.0, 0.0, sc)
+        results = {}
+        for name, route in (('ground', ground), ('low', low)):
+            plan = {'seed': sc.seed, 'routes': [{'aircraft': scout.id, 'waypoints': tour},
+                                                {'aircraft': eff.id, 'waypoints': route}]}
+            result = evaluate(sc, plan)
+            self.assertTrue(result.valid, result.violations)
+            results[name] = result
+        self.assertGreater(results['ground'].score, results['low'].score)
+        energy = lambda r: route_energy_wh(parse_plan({'seed': sc.seed, 'routes': [
+            {'aircraft': eff.id, 'waypoints': r}]})[0][eff.id].waypoints, eff)
+        self.assertLess(energy(ground), energy(low) - eff.power.e_climb_wh_per_m * 29.0)
+        # Too early for the straight line at cruise speed.
+        self.assertIsNone(search_planner.effector_route(eff, target, earliest - 1.0,
+                                                        search_planner.GROUND_Z, 0.0, sc)[0])
+        # Ground routes are straight: other approach angles add nothing.
+        self.assertIsNone(search_planner.effector_route(eff, target, arrive,
+                                                        search_planner.GROUND_Z, 35.0, sc)[0])
+
+    def test_blocked_ground_line_falls_back_to_the_30_m_route(self):
+        data = json.loads(json.dumps({
+            'seed': 1, 'level': 'test', 'horizon_s': 900, 'aircraft': [], 'contacts': [],
+            'zones': [dict(id='Z', center=[700, 325], radius_m=60.0, top_m=40.0)]}))
+        base = scenario()
+        sc = replace(base, zones=Scenario.from_dict(data).zones)
+        eff = next(a for a in sc.aircraft if a.subtype == 'light')
+        target = next(c for c in sc.contacts if c.id == 'B')
+        self.assertIsNone(search_planner.ground_route(eff, target, 500.0, sc))
+        route, _ = search_planner.effector_route(eff, target, 500.0, search_planner.GROUND_Z,
+                                                 0.0, sc)
+        self.assertGreater(len(route), 2)
+        self.assertTrue(all(w['z'] >= 30.0 for w in route[1:-1]))
+        self.assertEqual(ClimbTests().legs_ok(sc, {eff.id: route}), [])
+
+    def test_layer_sets_follow_the_flag(self):
+        self.assertEqual(search_planner.effector_layer_sets()[0], (search_planner.GROUND_Z,))
+        search_planner.GROUND_STRIKES = False
+        try:
+            self.assertEqual(search_planner.effector_layer_sets(), search_planner.EFFECTOR_Z)
+        finally:
+            search_planner.GROUND_STRIKES = True
+
+    def test_search_exports_valid_plans_with_ground_strikes(self):
+        sc = scenario()
+        verified = Search(sc, seconds=3.0).run()
+        for state, result in verified:
+            self.assertTrue(evaluate(sc, state.plan(sc.seed)).valid)
+        best = verified[0][0]
+        effectors = [r for aid, r in best.routes.items()
+                     if next(a for a in sc.aircraft if a.id == aid).type == 'effector']
+        self.assertTrue(any(len(r) == 2 and r[-1]['z'] == 0.0 for r in effectors))
+
+
+class ScoutRankTests(unittest.TestCase):
+    def test_cheaper_scout_ranks_first_with_energy_ranking(self):
+        sc = scenario()
+        cheap = sc.aircraft[1]
+        sc.aircraft[1] = replace(cheap, power=replace(cheap.power, p0_w=50.0))
+        search = Search(sc, seconds=5)
+        contact = next(c for c in sc.contacts if c.id == 'A')
+        ranked = [a.id for a in search.ranked_scouts(search.root, contact, False)]
+        self.assertEqual(ranked[0], 'scout1')
+        search_planner.SCOUT_ENERGY_RANK = False
+        try:
+            ranked = [a.id for a in search.ranked_scouts(search.root, contact, False)]
+        finally:
+            search_planner.SCOUT_ENERGY_RANK = True
+        # By added distance only, the nearer pad wins.
+        self.assertEqual(ranked[0], 'scout0')
+
+
 class CacheTests(unittest.TestCase):
     def test_memoised_validation_matches_fresh_validation(self):
         sc = Scenario.from_dict(generate('L3', 2))
