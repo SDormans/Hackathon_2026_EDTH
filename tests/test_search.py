@@ -107,8 +107,11 @@ class IncrementalTests(unittest.TestCase):
             route = copy.deepcopy(self.routes[aid])
             for wp in route:
                 wp[field] += shift
-            self.assertIsNotNone(checker.quick_reject({aid: route}))
+            rule = checker.quick_reject({aid: route})
+            self.assertIsNotNone(rule)
+            checker.last_rule = None
             self.assertIsNone(checker.extend(search.root, {aid: route}))
+            self.assertEqual(checker.last_rule, rule)
         self.assertIsNone(checker.quick_reject(self.routes))
 
     def test_rebuilt_scout_must_keep_previous_confirmations(self):

@@ -162,6 +162,7 @@ class IncrementalValidator:
     def _extend(self, parent, extra):
         rule = self.quick_reject(extra)
         if rule:
+            self.last_rule = rule
             self.rejections[rule] = self.rejections.get(rule, 0) + 1
             return None
         plan = {"seed": self.sc.seed, "routes": [
