@@ -223,6 +223,127 @@ def scout_reachable(scenario, scout, tasks, pos, z, prev_route=None):
             <= scenario.horizon_s + EPS)
 
 
+# Pads are about 11 m apart and separation is 40 m: two aircraft climbing from neighbouring
+# pads at the same time break R8. Most scout R8 rejections were exactly that.
+PAD_TAKEOFFS = True
+# Strike arrival delays after confirmation; finer early steps give pad-separated takeoffs
+# more chances before the window closes.
+STRIKE_DELAYS = (0.0, 4.0, 8.0, 14.0, 20.0, 30.0, 45.0, 90.0)
+
+
+def takeoff_need(scenario, a, b):
+    """Seconds two takeoffs from these pads must be apart, or None if far enough."""
+    d_sep = scenario.rules.d_sep_m + 2.0
+    gap = hdist(a.home, b.home)
+    if gap >= d_sep:
+        return None
+    climb = SPEED_FACTOR * min(a.v_up_mps, b.v_up_mps)
+    return math.sqrt(max(0.0, d_sep * d_sep - gap * gap)) / climb + 1.0
+
+
+def pad_conflict(scenario, aircraft, routes, extra):
+    """True if a new route takes off too close in time to a neighbouring pad's takeoff."""
+    for aid, route in extra.items():
+        mine = aircraft[aid]
+        for oid, other in list(extra.items()) + list(routes.items()):
+            if oid == aid or not other or (oid in extra and other is not extra[oid]):
+                continue
+            need = takeoff_need(scenario, mine, aircraft[oid])
+            if need is not None and abs(route[0]["t"] - other[0]["t"]) < need:
+                return True
+    return False
+
+
+def takeoff_shift(scenario, aircraft, routes, scout, depart, limit=40.0, step=2.0):
+    """Smallest delay so the scout's climb stays clear of takeoffs on neighbouring pads.
+    Landings and later legs are left to the validator."""
+    others = []
+    for aid, route in routes.items():
+        if aid == scout.id or not route:
+            continue
+        need = takeoff_need(scenario, scout, aircraft[aid])
+        if need is not None:
+            others.append((route[0]["t"], need))
+    shift = 0.0
+    while shift <= limit:
+        if all(abs(depart + shift - t0) >= need for t0, need in others):
+            return shift
+        shift += step
+    return 0.0
+
+
+# Scout options are ranked and filtered by a straight-leg replay of the whole tour
+# (tour_estimate): every window, strike confirmations, landing before the horizon and
+# battery. Off: the distance ranking and scout_reachable bound only.
+TIME_RANK = True
+
+
+def tour_estimate(scenario, scout, legs, z):
+    """Straight-leg replay of scout_tour: (finish times, landing time, Wh), or None as
+    soon as a visit cannot finish inside its window.
+
+    `legs` = [(point, window, reach)] in visit order; `reach` shortens the legs into and
+    out of a point that is not chosen yet (it lies within `reach` of its contact). Same
+    departure rule, climb, dwell and cruise speed as scout_tour at layer z (hybrid: the
+    fast speed), without detours, so every time is a lower bound on the real tour.
+    """
+    rules_, power = scenario.rules, scout.power
+    speed = eco_speed(scout) if SCOUT_SPEED_MODE == "eco" else fast_speed(scout)
+    climb = z / (SPEED_FACTOR * scout.v_up_mps) + 0.5
+    home = scout.home[:2]
+    first = max(0.0, hdist(home, legs[0][0]) - legs[0][2])
+    t = max(0.0, legs[0][1][0] - (first / speed + z / scout.v_up_mps + 3.0)) + climb
+    wh = power.p0_w * climb / 3600.0 + power.e_climb_wh_per_m * z
+    here, slack, finishes = home, 0.0, []
+    for point, (lo, hi), reach in legs:
+        d = max(0.0, hdist(here, point) - reach - slack)
+        arrive = max(t + d / speed, lo)
+        if arrive + rules_.obs_dwell_s > hi + EPS:
+            return None
+        if arrive > t:
+            v = d / (arrive - t)
+            wh += (power.p0_w + power.k_v * v * v) * (arrive - t) / 3600.0
+        t = arrive + rules_.obs_dwell_s
+        wh += power.p0_w * rules_.obs_dwell_s / 3600.0
+        finishes.append(t)
+        here, slack = point, reach
+    back = max(0.0, hdist(here, home) - slack) / speed
+    descent = z / (SPEED_FACTOR * scout.v_down_mps) + 0.5
+    wh += ((power.p0_w + power.k_v * speed * speed) * back + power.p0_w * descent) / 3600.0
+    return finishes, t + back + descent, wh
+
+
+def tour_fits(scenario, scout, current, contact, order, z, deadlines):
+    """False only when the tour visiting `order` (contact ids) at layer z must fail:
+    a window or a strike's confirmation deadline (R4) missed, landing after the horizon
+    (R1), or the battery exceeded (R3, 1% margin for the estimate)."""
+    by_id = {t["cid"]: t for t in current}
+    legs = []
+    for cid in order:
+        if cid == contact.id:
+            legs.append((contact.pos[:2], tuple(contact.window), obs_offset(scenario, contact, z)))
+        else:
+            t = by_id[cid]
+            lo, hi = t["window"]
+            legs.append((t["point"], (lo, min(hi, deadlines.get(cid, math.inf))), 0.0))
+    est = tour_estimate(scenario, scout, legs, z)
+    return (est is not None and est[1] <= scenario.horizon_s + EPS
+            and est[2] <= 1.01 * scout.usable_wh)
+
+
+def strike_deadlines(scenario, aircraft, routes):
+    """Latest observation finish for each struck contact (its first engagement - margin)."""
+    out = {}
+    for aid, route in routes.items():
+        if aircraft[aid].type == SCOUT:
+            continue
+        for w in route:
+            if w.get("action") == "engage":
+                cid = w["target"]
+                out[cid] = min(out.get(cid, math.inf), w["t"] - scenario.rules.confirm_margin_s)
+    return out
+
+
 def insertion_positions(home, tasks, pos, limit):
     """Tour positions ordered by added horizontal distance (cheapest insertion first)."""
     points = [home[:2]] + [t["point"] for t in tasks] + [home[:2]]
@@ -233,7 +354,7 @@ def insertion_positions(home, tasks, pos, limit):
 
 # How far one attempt to serve a contact got, from least to most progress.
 # An attempt is one call to Search.children for one parent node.
-STAGES = ("no_options", "no_team", "scout_route", "scout_rule", "strike_route",
+STAGES = ("no_options", "no_team", "scout_window", "scout_route", "scout_rule", "strike_route",
           "strike_rule", "not_improving", "accepted")
 
 
@@ -561,6 +682,8 @@ class Search:
         all scouts may share a base, so an idle one is often the only one that fits.
         """
         scouts = _Planner(self.sc)._scout_candidates(contact, limit=len(parent.tasks))
+        if TIME_RANK:
+            return self._time_ranked(parent, contact, insert, scouts)
         if insert:
             def reach(a):
                 points = [a.home] + [t["point"] for t in parent.tasks[a.id]]
@@ -575,6 +698,35 @@ class Search:
             if idle is not None:
                 scouts = head[:-1] + [idle] + [a for a in scouts[SCOUT_FANOUT - 1:] if a is not idle]
         return scouts
+
+    def _time_ranked(self, parent, contact, insert, scouts):
+        """Scouts with a visit order that fits (tour_fits at the lowest layer), cheapest
+        added distance first; one idle scout that fits among the first SCOUT_FANOUT."""
+        deadlines = strike_deadlines(self.sc, self.aircraft, parent.routes)
+        z = min(SCOUT_LAYERS)
+        ranked = []
+        for scout in scouts:
+            current = parent.tasks[scout.id]
+            cids = tuple(t["cid"] for t in current)
+            points = [scout.home[:2]] + [t["point"] for t in current] + [scout.home[:2]]
+            best = None
+            for i in (range(len(current) + 1) if insert else [len(current)]):
+                order = cids[:i] + (contact.id,) + cids[i:]
+                if not tour_fits(self.sc, scout, current, contact, order, z, deadlines):
+                    continue
+                added = (hdist(points[i], contact.pos) + hdist(contact.pos, points[i + 1])
+                         - hdist(points[i], points[i + 1]))
+                best = added if best is None else min(best, added)
+            if best is not None:
+                ranked.append((best, scout.id, scout))
+        ranked.sort(key=lambda r: r[:2])
+        out = [r[2] for r in ranked]
+        head = out[:SCOUT_FANOUT]
+        if head and all(parent.tasks[a.id] for a in head):
+            idle = next((a for a in out[SCOUT_FANOUT:] if not parent.tasks[a.id]), None)
+            if idle is not None:
+                out = head[:-1] + [idle] + [a for a in out[SCOUT_FANOUT - 1:] if a is not idle]
+        return out
 
     @staticmethod
     def tour_orders(scout, current, contact, insert, skip_append=False):
@@ -614,18 +766,29 @@ class Search:
         horizon, yield None without building a route.
         """
         p = _Planner(self.sc)
+        deadlines = strike_deadlines(self.sc, self.aircraft, parent.routes) if TIME_RANK else {}
         for scout in self.ranked_scouts(parent, contact, insert)[ranks]:
             current = parent.tasks[scout.id]
             by_id = {t["cid"]: t for t in current}
             prev_route = parent.routes.get(scout.id)
             for order, keeps_prefix in self.tour_orders(scout, current, contact, insert, skip_append):
                 pos = order.index(contact.id)
+                fits = {z: not TIME_RANK or tour_fits(self.sc, scout, current, contact, order, z,
+                                                      deadlines) for z in SCOUT_LAYERS}
                 for z, obs_angle, shift in itertools.product(SCOUT_LAYERS, (0.0, 60.0, -60.0),
                                                              (0.0, 7.0)):
+                    if not fits[z]:
+                        yield scout, None, None
+                        continue
                     task = {"cid": contact.id,
                             "point": obs_point(self.sc, scout, contact, obs_angle, z),
                             "window": contact.window, "cpos": contact.pos}
                     tasks = [task if cid == contact.id else by_id[cid] for cid in order]
+                    if PAD_TAKEOFFS:
+                        # Delay takeoff past neighbours on nearby pads (most scout R8 conflicts).
+                        speed = eco_speed(scout) if SCOUT_SPEED_MODE != "fast" else fast_speed(scout)
+                        shift += takeoff_shift(self.sc, self.aircraft, parent.routes, scout,
+                                               _depart(scout, tasks, z, speed, 0.0))
                     if not scout_reachable(self.sc, scout, tasks, pos, z,
                                            prev_route if keeps_prefix else None):
                         yield scout, tasks, None
@@ -648,6 +811,10 @@ class Search:
             rounds.append(self.scout_options(parent, contact, True, skip_append=True))
         rounds.append(self.scout_options(parent, contact, True, slice(SCOUT_FANOUT, SCOUT_FALLBACK)))
         state = {"count": 0, "seen": set()}
+        if TIME_RANK and not any(self.ranked_scouts(parent, contact, True)):
+            # No scout has any visit order that fits, at any tour position.
+            self._progress(stats, progress, "scout_window")
+            return
         for options in rounds:
             for item in self._serve(parent, contact, options, groups, stop, limit, stats,
                                     progress, state):
@@ -702,8 +869,8 @@ class Search:
         for team in groups:
             found = False
             spacing = min(5.0, self.sc.rules.sync_window_s / max(1, len(team)-1))
-            for delay, angle, rotation in itertools.product((0.0, 8.0, 20.0, 45.0, 90.0),
-                                                             (0.0, 35.0, -35.0), range(3)):
+            delays = STRIKE_DELAYS if PAD_TAKEOFFS else (0.0, 8.0, 20.0, 45.0, 90.0)
+            for delay, angle, rotation in itertools.product(delays, (0.0, 35.0, -35.0), range(3)):
                 self.checker.check_time(stop)
                 arrive = base + delay
                 if arrive + spacing*(len(team)-1) > contact.window[1] + EPS:
@@ -718,6 +885,12 @@ class Search:
                 if len(extra) != len(team)+1:
                     if stats is not None:
                         self._progress(stats, progress, "strike_route")
+                    continue
+                if PAD_TAKEOFFS and pad_conflict(self.sc, self.aircraft, parent.routes,
+                                                 {aid: r for aid, r in extra.items() if aid != scout.id}):
+                    # Neighbouring pads climbing together: R8 without a validator call.
+                    if stats is not None:
+                        self._progress(stats, progress, "strike_rule:R8")
                     continue
                 candidate = self.checker.extend(parent, extra)
                 if candidate is None and stats is not None:

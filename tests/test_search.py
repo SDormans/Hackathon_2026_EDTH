@@ -375,7 +375,13 @@ class LnsTests(unittest.TestCase):
         built = p._add_observation(scout, contact, 70.0, 0.0, 7.0)
         self.assertIsNotNone(built)
         tasks, route = built
-        self.assertEqual(scout_tour(sc, scout, tasks, 70.0, 7.0), route)
+        # The kit's speed and observation offset: eco mode, no stretch.
+        saved = search_planner.SCOUT_SPEED_MODE, search_planner.OBS_STRETCH
+        search_planner.SCOUT_SPEED_MODE, search_planner.OBS_STRETCH = "eco", False
+        try:
+            self.assertEqual(scout_tour(sc, scout, tasks, 70.0, 7.0), route)
+        finally:
+            search_planner.SCOUT_SPEED_MODE, search_planner.OBS_STRETCH = saved
 
     def test_removal_is_valid_and_frees_the_contact(self):
         sc = Scenario.from_dict(generate('L2', 3))
@@ -446,6 +452,51 @@ class LnsTests(unittest.TestCase):
                     self.assertEqual(bursts, [None])
                 if 'adaptive' in flags:
                     self.assertNotEqual(set(report['weights'].values()), {1.0})
+
+
+
+def plain_aircraft(sc):
+    return [dict(id=a.id, type=a.type, subtype=a.subtype, home=list(a.home), v_h_mps=a.v_h_mps,
+                 v_up_mps=a.v_up_mps, v_down_mps=a.v_down_mps, capacity_wh=a.capacity_wh,
+                 battery_pct=a.battery_pct, power=dict(p0_w=a.power.p0_w, k_v=a.power.k_v,
+                                                      e_climb_wh_per_m=a.power.e_climb_wh_per_m))
+            for a in sc.aircraft]
+
+
+class PadTimingTests(unittest.TestCase):
+    def pads(self, gap):
+        aircraft = plain_aircraft(scenario())
+        aircraft[0]['home'], aircraft[1]['home'] = [0, 0, 0], [gap, 0, 0]
+        return Scenario.from_dict(dict(seed=1, level='test', horizon_s=900, zones=[],
+                                       aircraft=aircraft, contacts=[]))
+
+    def test_takeoff_shift_clears_neighbouring_pad(self):
+        from search_planner import takeoff_shift, takeoff_need
+        sc = self.pads(11.0)
+        a, b = sc.aircraft[0], sc.aircraft[1]
+        need = takeoff_need(sc, a, b)
+        self.assertGreater(need, 0)
+        routes = {b.id: [{'t': 100.0}]}
+        shift = takeoff_shift(sc, sc.aircraft_by_id(), routes, a, 99.0)
+        self.assertGreaterEqual(abs(99.0 + shift - 100.0), need)
+        self.assertEqual(takeoff_shift(sc, sc.aircraft_by_id(), routes, a, 300.0), 0.0)
+        far = self.pads(100.0)
+        self.assertIsNone(takeoff_need(far, far.aircraft[0], far.aircraft[1]))
+
+    def test_pad_conflict_flags_close_takeoffs_only(self):
+        from search_planner import pad_conflict
+        sc = self.pads(11.0)
+        by_id = sc.aircraft_by_id()
+        a, b = sc.aircraft[0].id, sc.aircraft[1].id
+        self.assertTrue(pad_conflict(sc, by_id, {b: [{'t': 50.0}]}, {a: [{'t': 51.0}]}))
+        self.assertFalse(pad_conflict(sc, by_id, {b: [{'t': 50.0}]}, {a: [{'t': 80.0}]}))
+        # A route being replaced is not compared with its own old version.
+        self.assertFalse(pad_conflict(sc, by_id, {a: [{'t': 51.0}]}, {a: [{'t': 50.0}]}))
+
+    def test_search_with_pad_takeoffs_exports_valid_plans(self):
+        sc = Scenario.from_dict(generate('L3', 2))
+        for state, result in Search(sc, seconds=4.0).run():
+            self.assertTrue(evaluate(sc, state.plan(sc.seed)).valid)
 
 
 if __name__ == '__main__':
