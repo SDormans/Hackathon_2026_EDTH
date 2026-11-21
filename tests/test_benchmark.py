@@ -72,6 +72,24 @@ class SummaryTests(unittest.TestCase):
             self.assertEqual(bench.read_diagnostics(log), {})
             self.assertEqual(bench.read_diagnostics(Path(tmp) / 'missing.log'), {})
 
+    def test_contact_class_rates_and_missing_history(self):
+        row = self.row(1, 2)
+        row['diagnostics'] = {'contacts': {
+            'H1': dict(cls='hostile', points=10, served=False, reason='scout_route'),
+            'H2': dict(cls='hostile', points=20, served=True),
+            'U1': dict(cls='unknown', points=5, served=False, reason='scout_rule:R8'),
+            'U2': dict(cls='unknown', points=8, served=False, reason='time_cap'),
+            'U3': dict(cls='unknown', points=2, served=True)}}
+        result = bench.contact_summary([row, row, self.row(1, 1), self.row(1, 0, 'crash')])
+        self.assertEqual(result['cases_with_detail'], 2)
+        self.assertEqual(result['cases_without_detail'], 2)
+        hostile, unknown = result['by_class']['hostile'], result['by_class']['unknown']
+        self.assertEqual(hostile['scout_failures'], 2)
+        self.assertEqual(hostile['scout_failure_rate_pct'], 50)
+        self.assertAlmostEqual(unknown['scout_failure_rate_pct'], 100/3)
+        self.assertEqual(unknown['unserved_points']['scout_rule:R8'], 10)
+        self.assertIsNone(bench.contact_summary([])['by_class']['unknown']['scout_failure_rate_pct'])
+
     def test_gain_uses_summed_scores(self):
         s = bench.summarize([self.row(1, 2), self.row(100, 100)])
         self.assertAlmostEqual(s['improvement_pct'], 100/101)
@@ -146,6 +164,17 @@ class BatchIntegrationTests(unittest.TestCase):
                     self.assertTrue(evaluate(sc, load_json(folder / name)).valid)
                 # Every target our plan missed is accounted for with a reason.
                 targets = {c.id for c in sc.contacts if c.cls in ('hostile', 'unknown')}
+                detail = row['diagnostics']['contacts']
+                self.assertEqual(set(detail), targets)
+                for c in sc.contacts:
+                    if c.id in targets:
+                        self.assertEqual(detail[c.id]['cls'], c.cls)
+                        self.assertEqual(detail[c.id]['points'], c.points)
+                        self.assertEqual(detail[c.id]['served'], c.id in row['served'])
+                        self.assertIn('outcomes', detail[c.id])
+                        self.assertIn('rules', detail[c.id])
+                        if not detail[c.id]['served']:
+                            self.assertIn('reason', detail[c.id])
                 missed = targets - set(row['served'])
                 self.assertEqual(sum(row['diagnostics']['unserved'].values()), len(missed))
             self.assertEqual(sum(summary['total']['unserved'].values()),

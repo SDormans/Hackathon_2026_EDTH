@@ -114,7 +114,7 @@ def run_planner(command, scenario, plan_path, log_path, timeout, env):
                 note=note, returncode=returncode)
 
 
-DIAGNOSTIC_KEYS = ('passes', 'candidate_checks', 'rejections', 'unserved', 'unserved_points')
+DIAGNOSTIC_KEYS = ('passes', 'candidate_checks', 'rejections', 'unserved', 'unserved_points', 'contacts')
 
 
 def read_diagnostics(log_path):
@@ -179,6 +179,39 @@ def add_counts(total, counts):
     return total
 
 
+def contact_summary(rows):
+    """Count contact observations, not unique IDs across repeated cases/runs.
+
+    Rates use all diagnosed contacts of each class as their denominator.
+    Missing detail (old logs/custom planners/failed runs) is excluded explicitly.
+    """
+    classes = {cls: dict(contacts=0, served=0, unserved=0, scout_failures=0,
+                        reasons={}, unserved_points={}) for cls in ('hostile', 'unknown')}
+    covered = missing = 0
+    for row in rows:
+        contacts = row.get('diagnostics', {}).get('contacts')
+        if row.get('generation_status') != 'ok' or row.get('search', {}).get('status') != 'ok' or not isinstance(contacts, dict):
+            missing += 1
+            continue
+        covered += 1
+        for entry in contacts.values():
+            bucket = classes[entry['cls']]
+            bucket['contacts'] += 1
+            if entry['served']:
+                bucket['served'] += 1
+                continue
+            bucket['unserved'] += 1
+            reason = entry['reason']
+            bucket['reasons'][reason] = bucket['reasons'].get(reason, 0) + 1
+            bucket['unserved_points'][reason] = bucket['unserved_points'].get(reason, 0) + entry['points']
+            if reason == 'scout_route' or reason.startswith('scout_rule:'):
+                bucket['scout_failures'] += 1
+    for bucket in classes.values():
+        bucket['scout_failure_rate_pct'] = (100 * bucket['scout_failures'] / bucket['contacts']
+                                             if bucket['contacts'] else None)
+    return dict(cases_with_detail=covered, cases_without_detail=missing, by_class=classes)
+
+
 def summarize(rows):
     eligible = [r for r in rows if r['generation_status'] == 'ok']
     unserved, unserved_points = {}, {}
@@ -188,7 +221,7 @@ def summarize(rows):
     unserved_points = dict(sorted(unserved_points.items(), key=lambda kv: -kv[1]))
     baseline = sum(r['baseline_score'] for r in eligible)
     score = sum(r['search_score'] for r in eligible)
-    return dict(cases=len(rows), compared=len(eligible), baseline_score=baseline,
+    return dict(cases=len(rows), compared=len(eligible), contact_summary=contact_summary(rows), baseline_score=baseline,
                 search_score=score, improvement=score-baseline,
                 improvement_pct=percent(score-baseline, baseline),
                 wins=sum(r['improvement'] > 1e-7 for r in eligible),
