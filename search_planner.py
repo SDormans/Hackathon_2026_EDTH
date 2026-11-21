@@ -251,66 +251,6 @@ def obs_point(scenario, scout, contact, angle, z):
     return contact.pos[0] + ux * off, contact.pos[1] + uy * off
 
 
-# Two consecutive tour visits whose contacts lie within observation range of one common
-# point are observed from that point: two observe waypoints (one per contact, each with
-# the full dwell, as R1/R9 and valid_observation require one target per waypoint) at the
-# same position, with no leg between them. Off: every visit has its own point.
-CLUSTER_OBS = True
-
-
-def _project_disk(p, c, r):
-    d = math.hypot(p[0] - c[0], p[1] - c[1])
-    if d <= r:
-        return p
-    return c[0] + (p[0] - c[0]) * r / d, c[1] + (p[1] - c[1]) * r / d
-
-
-def shared_point(a, ra, b, rb, seeds, prev, nxt):
-    """A point within ra of a and rb of b (alternating projections from each seed),
-    minimising the path prev -> point -> nxt; None when the disks do not overlap."""
-    if math.hypot(a[0] - b[0], a[1] - b[1]) > ra + rb - 1e-6:
-        return None
-    best = None
-    for p in seeds:
-        for _ in range(30):
-            p = _project_disk(_project_disk(p, a, ra), b, rb)
-        if (math.hypot(p[0] - a[0], p[1] - a[1]) > ra + 1e-6
-                or math.hypot(p[0] - b[0], p[1] - b[1]) > rb + 1e-6):
-            continue
-        cost = hdist(prev, p) + hdist(p, nxt)
-        if best is None or cost < best[0]:
-            best = (cost, p)
-    return None if best is None else best[1]
-
-
-def cluster_points(tasks, z, home, scenario):
-    """{task index: shared point} for consecutive visit pairs observed from one point,
-    used only where that shortens the path between their neighbours."""
-    reach = scenario.rules.R_obs_m - OBS_MARGIN_M - 1.0
-    out = {}
-    points = [tuple(t["point"]) for t in tasks]
-    n = 0
-    while n + 1 < len(tasks):
-        a, b = tasks[n].get("cpos"), tasks[n + 1].get("cpos")
-        if a is None or b is None:
-            n += 1
-            continue
-        ra = math.sqrt(max(0.0, reach * reach - (z - a[2]) ** 2))
-        rb = math.sqrt(max(0.0, reach * reach - (z - b[2]) ** 2))
-        prev = out.get(n - 1, points[n - 1] if n else home[:2])
-        nxt = points[n + 2] if n + 2 < len(tasks) else home[:2]
-        mid = ((a[0] + b[0]) / 2, (a[1] + b[1]) / 2)
-        p = shared_point(a, ra, b, rb, (points[n], points[n + 1], prev, nxt, mid), prev, nxt)
-        if p is not None and (hdist(prev, p) + hdist(p, nxt) + 1.0
-                              < hdist(prev, points[n]) + hdist(points[n], points[n + 1])
-                              + hdist(points[n + 1], nxt)):
-            out[n] = out[n + 1] = p
-            n += 2
-        else:
-            n += 1
-    return out
-
-
 def build_scout_route(scout, tasks, depart, z, scenario, speed, diagonal=None):
     """The kit's _scout_route with an explicit cruise speed (same waypoints at the kit speed
     without DIAGONAL_CLIMB). Diagonal: the first leg climbs and the last descends."""
@@ -326,11 +266,10 @@ def build_scout_route(scout, tasks, depart, z, scenario, speed, diagonal=None):
         t += z / (SPEED_FACTOR * scout.v_up_mps) + 0.5
         wps.append(wp(t, above))
     cur = above
-    shared = cluster_points(tasks, z, home, scenario) if CLUSTER_OBS else {}
     for n, task in enumerate(tasks):
-        px, py = shared.get(n, task["point"])
+        px, py = task["point"]
         cpos = task.get("cpos")
-        if cpos is not None and n not in shared:
+        if cpos is not None:
             # A point stretched for 70 m may be out of range when the tour flies at 110 m.
             reach = rules_.R_obs_m - OBS_MARGIN_M
             h = math.sqrt(max(0.0, reach * reach - (z - cpos[2]) ** 2))
@@ -338,11 +277,7 @@ def build_scout_route(scout, tasks, depart, z, scenario, speed, diagonal=None):
             if d > h:
                 px, py = cpos[0] + (px - cpos[0]) * h / d, cpos[1] + (py - cpos[1]) * h / d
         target = (px, py, z)
-        if n in shared and n - 1 in shared and shared[n - 1] == shared[n]:
-            path = [cur, cur]  # Second contact of a shared point: no leg.
-            target = cur
-        else:
-            path = detour([cur, target], scenario)
+        path = detour([cur, target], scenario)
         if path is None:
             return None
         total = length(path)
@@ -430,7 +365,6 @@ def scout_tour(scenario, scout, tasks, z, shift=0.0, depart=None):
     after construction, so the waypoint dicts are shared; the list itself is a copy.
     """
     key = (id(scenario), scout.id, z, shift, depart, SCOUT_SPEED_MODE, OBS_STRETCH, DIAGONAL_CLIMB,
-           CLUSTER_OBS,
            tuple((t["cid"], tuple(t["point"]), tuple(t["window"])) for t in tasks))
     hit = _tours.get(key)
     if hit is None or hit[0] is not scenario:
