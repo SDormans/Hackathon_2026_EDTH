@@ -866,14 +866,6 @@ def pack_trips(trips, stop=None):
 # unserved positive-net contacts near them, generate each scout's top trips over that pool
 # with the label search, choose the best combination of disjoint trips and realise it when
 # its estimated value beats the scouts' current trips. Empty: the operator is off.
-# Tour polish: when LNS finds a new best plan (and once after repair), each scout's visit
-# order is improved by relocating single visits and reversing segments (2-opt / or-opt);
-# a new order is kept when its rebuilt tour passes the incremental validator and scores
-# higher. At most POLISH_S seconds per call.
-TOUR_POLISH = True
-POLISH_S = 0.3
-POLISH_TASKS = 8         # longer tours try relocations only
-
 GROUP_SIZES = (2, 3, 4)  # random n per move; () turns the operator off
 GROUP_SHARE = 0.2        # share of LNS steps using "group" (without --adaptive)
 GROUP_TRIPS = 40         # trips kept per scout (plus the cover trips)
@@ -1304,8 +1296,7 @@ class Search:
                     "trip_gain": 0.0, "trip_label_s": 0.0,
                     "group_tried": 0, "group_realised": 0, "group_accepted": 0,
                     "group_improvements": 0, "group_gain": 0.0, "group_label_s": 0.0,
-                    "group_sizes": {}, "polish_tried": 0, "polish_improvements": 0,
-                    "polish_gain": 0.0}
+                    "group_sizes": {}}
         self._trip_cache = {}
         self.trip_stats = {}
         self.lns_share = lns_share
@@ -1758,10 +1749,7 @@ class Search:
             if contacts:
                 best = self.archive[0]
                 depth = max((n["depth"] for n in self.trace if n["id"] == best.node_id), default=0)
-                repaired = self.repair(best, depth)
-                polished = self.polish_tours(repaired)
-                if polished is not repaired:
-                    self.record(polished, repaired, {"kind": "repair", "op": "polish"}, depth + 1)
+                self.repair(best, depth)
         except DeadlineReached:
             pass
         self.checker.stop = self.stop
@@ -2264,11 +2252,6 @@ class Search:
                                                                      "removed": removed},
                                                   len(partial.served))
             if current.score > best.score + 1e-9:
-                polished = self.polish_tours(current)
-                if polished is not current:
-                    current = st["current"] = self.record(polished, current,
-                                                          {"kind": "lns", "op": "polish"},
-                                                          len(polished.served))
                 self.lns["improvements"] += 1
                 self.lns["gain"] += current.score - best.score
                 if op in ("trip", "group"):
@@ -2285,69 +2268,6 @@ class Search:
         if st["stale"] >= 25:
             st["stale"] = 0
             st["current"] = rng.choice(self.archive) if self.restarts else st["best"]
-
-    @staticmethod
-    def tour_neighbours(n):
-        """Index orders near range(n): single-visit relocations, then segment reversals."""
-        base = list(range(n))
-        seen = {tuple(base)}
-        for i in range(n):
-            for j in range(n):
-                if i != j:
-                    order = base[:i] + base[i + 1:]
-                    order.insert(j, i)
-                    if tuple(order) not in seen:
-                        seen.add(tuple(order))
-                        yield order
-        if n <= POLISH_TASKS:
-            for i in range(n - 1):
-                for j in range(i + 2, n + 1):
-                    order = base[:i] + base[i:j][::-1] + base[j:]
-                    if tuple(order) not in seen:
-                        seen.add(tuple(order))
-                        yield order
-
-    def polish_tours(self, state, stop=None):
-        """state with better scout visit orders (first improvement per scout), or state."""
-        if not TOUR_POLISH:
-            return state
-        stop = min(self.checker.stop if stop is None else stop, time.monotonic() + POLISH_S)
-        self.lns["polish_tried"] += 1
-        start_score = state.score
-        try:
-            for sid in sorted(state.tasks):
-                tasks = state.tasks[sid]
-                route = state.routes.get(sid)
-                if len(tasks) < 2 or route is None:
-                    continue
-                scout, z = self.aircraft[sid], max(w["z"] for w in route)
-                speed = eco_speed(scout) if SCOUT_SPEED_MODE != "fast" else fast_speed(scout)
-                improved = True
-                while improved:
-                    improved = False
-                    for order in self.tour_neighbours(len(tasks)):
-                        self.checker.check_time(stop)
-                        tt = [tasks[i] for i in order]
-                        shift = 0.0
-                        if PAD_TAKEOFFS:
-                            shift = takeoff_shift(self.sc, self.aircraft, state.routes, scout,
-                                                  _depart(scout, tt, z, speed, 0.0))
-                        tour = scout_tour(self.sc, scout, tt, z, shift)
-                        if tour is None:
-                            continue
-                        child = self.checker.extend(state, {sid: tour})
-                        if child is None or child.score <= state.score + 1e-9 \
-                                or not state.served <= child.served:
-                            continue
-                        child.tasks = {**state.tasks, sid: tt}
-                        state, tasks, improved = child, tt, True
-                        break
-        except DeadlineReached:
-            pass
-        if state.score > start_score + 1e-9:
-            self.lns["polish_improvements"] += 1
-            self.lns["polish_gain"] += state.score - start_score
-        return state
 
     def diagnostics(self, served):
         """Per-contact accounting against the winner's served set."""
