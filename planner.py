@@ -40,8 +40,10 @@ def main():
     parser.add_argument("--beam-width", type=int, default=6)
     parser.add_argument("--lns-share", type=float, default=0.5,
                         help="share of the search time for large neighbourhood search, 0..0.9")
-    parser.add_argument("--scout-cost", choices=SCOUT_COSTS, default="time",
+    parser.add_argument("--scout-cost", choices=SCOUT_COSTS, default="mixed",
                         help="primary cost for ranking scout insertion positions")
+    parser.add_argument("--time-weight", type=float, default=0.75,
+                        help="weight of time in --scout-cost mixed, 0 (distance) .. 1 (time)")
     parser.add_argument("--artifacts", type=Path,
                         help="optional directory for ranked plans, tree.json and interactive tree.html")
     args = parser.parse_args()
@@ -49,9 +51,11 @@ def main():
         parser.error("seconds must be 0..55; top-n and beam-width must be 1..100")
     if not 0 <= args.lns_share <= 0.9:
         parser.error("lns-share must be 0..0.9")
+    if not 0 <= args.time_weight <= 1:
+        parser.error("time-weight must be 0..1")
     scenario = Scenario.from_dict(load_json(args.scenario))
     search = Search(scenario, args.seconds, args.top_n, args.beam_width, START, args.lns_share,
-                    args.scout_cost)
+                    args.scout_cost, args.time_weight)
     verified = search.run()
     # Required output is written before optional diagnostics.
     save_json(verified[0][0].plan(scenario.seed), args.plan)

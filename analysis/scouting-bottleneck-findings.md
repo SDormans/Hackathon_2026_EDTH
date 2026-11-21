@@ -207,3 +207,18 @@ All 80 plans were valid, with no timeouts. The same variant differed by at most 
 
 Since the direct energy differences are about 1 point per insertion, the ranking matters mainly through its effect on later insertions, not through energy. A likely reason, not tested: minimum added distance keeps each tour spatially compact and leaves more slack for later contacts. These results come from the same 10 seeds; other levels and unseen seeds were not run.
 
+## 8. Combined distance and time ranking
+
+`--scout-cost mixed` ranks by (1 − w) · added distance + w · added airborne time · cruise speed, so both terms are in metres; w is `--time-weight` (0 = distance, 1 = time). L4 seeds 0–9, 55 s, LNS share 0.5, two rounds of 8 concurrent batches on 8 cores:
+
+| Ranking | Round 1 | Round 2 | Mean |
+|---|---|---|---|
+| `distance` | 10,454.00 | 10,104.52 | 10,279.3 |
+| `mixed`, w = 0.25 | 10,103.78 | 10,201.93 | 10,152.9 |
+| `mixed`, w = 0.5 | 10,235.07 | 10,076.29 | 10,155.7 |
+| `mixed`, w = 0.75 | 10,432.16 | 10,103.84 | 10,268.0 |
+
+All 80 plans were valid, with no timeouts. In these rounds the same variant differed by up to 350 points between rounds, ten times more than in section 7, so the differences between rows (at most 1.2%) are within run-to-run noise and the order is not monotonic in w. No weight was measurably better than `distance`; all were above the `time` results of section 7 (9,811.5).
+
+`mixed` with w = 0.75 is the default because it keeps a time term and scored the same as `distance` within noise. `--scout-cost distance` or a different `--time-weight` can be used instead; deciding between them needs more rounds or more seeds.
+

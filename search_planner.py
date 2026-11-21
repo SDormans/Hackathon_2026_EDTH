@@ -244,13 +244,14 @@ class WarmPlanner(_Planner):
 
 
 # Ranking cost for scout insertions: airborne time including waits, straight-line
-# distance, flying time excluding waits, or estimated energy (fleetkit.energy model).
-SCOUT_COSTS = ("time", "distance", "flight", "energy")
+# distance, flying time excluding waits, estimated energy (fleetkit.energy model), or
+# mixed: (1 - time_weight) * distance + time_weight * time * cruise speed, in metres.
+SCOUT_COSTS = ("time", "distance", "flight", "energy", "mixed")
 
 
 class Search:
     def __init__(self, scenario, seconds=55.0, top_n=5, beam_width=6, start=None, lns_share=0.5,
-                 scout_cost="time"):
+                 scout_cost="mixed", time_weight=0.75):
         if seconds < 0 or not 1 <= top_n <= 100 or not 1 <= beam_width <= 100:
             raise ValueError("seconds must be nonnegative; top_n and beam_width must be 1..100")
         if not 0 <= lns_share <= 0.9:
@@ -260,6 +261,9 @@ class Search:
         self.lns_share = lns_share
         # Primary key for ranking scout insertion positions; the other breaks ties.
         self.scout_cost = scout_cost
+        if not 0 <= time_weight <= 1:
+            raise ValueError("time_weight must be 0..1")
+        self.time_weight = time_weight
         self.lns_stats = {"iterations": 0, "accepted": 0, "improved": 0}
         self.sc = scenario
         self.start = time.monotonic() if start is None else start
@@ -385,7 +389,10 @@ class Search:
         joules = (power.p0_w * (sum(durations) + dwell * len(stops) + climb + descent)
                   + power.k_v * sum(length * length / d for length, d in zip(lengths, durations) if d > 0))
         flying = sum(lengths) / speed + climb + descent
-        return {"time": t + durations[-1] + climb + descent,
+        seconds = t + durations[-1] + climb + descent
+        w = self.time_weight
+        return {"time": seconds,
+                "mixed": (1 - w) * sum(lengths) + w * seconds * speed,
                 "distance": sum(lengths),
                 "flight": flying + dwell * len(stops),
                 "energy": joules / 3600.0 + power.e_climb_wh_per_m * z}

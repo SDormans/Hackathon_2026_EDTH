@@ -260,6 +260,8 @@ class SearchTests(unittest.TestCase):
         sc = Scenario.from_dict(generate('L4', 0))
         with self.assertRaises(ValueError):
             Search(sc, scout_cost='fuel')
+        with self.assertRaises(ValueError):
+            Search(sc, scout_cost='mixed', time_weight=1.5)
         search = Search(sc, seconds=4)
         search.warm_start()
         state = search.archive[0]
