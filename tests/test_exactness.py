@@ -89,12 +89,15 @@ class ExactnessTests(unittest.TestCase):
             if tour is not None:
                 yield copy.deepcopy(tour)
 
-    def removal_orders(self, mode):
+    def removal_orders(self, keeps_prefix):
+        """Remove each visit and re-add it: insertion positions keep the other visits'
+        order (keeps_prefix True), reordered tours do not."""
         contacts = self.sc.contact_by_id()
         for task in self.tasks:
             rest = [t for t in self.tasks if t is not task]
-            for order, _ in Search.tour_orders(self.scout, rest, contacts[task["cid"]], mode):
-                yield order
+            for order, keeps in Search.tour_orders(self.scout, rest, contacts[task["cid"]], True):
+                if keeps == keeps_prefix:
+                    yield order
 
     def check_moves(self, orders):
         verdicts = [self.agree(tour) for tour in self.tours(orders)]
@@ -102,10 +105,10 @@ class ExactnessTests(unittest.TestCase):
         return verdicts
 
     def test_insertion_moves_agree(self):
-        self.check_moves(self.removal_orders("cheap"))
+        self.check_moves(self.removal_orders(True))
 
     def test_reorder_moves_agree(self):
-        self.check_moves(self.removal_orders(True))
+        self.check_moves(self.removal_orders(False))
 
     def test_two_opt_moves_agree(self):
         cids = [t["cid"] for t in self.tasks]
