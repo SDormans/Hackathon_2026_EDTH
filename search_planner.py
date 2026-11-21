@@ -41,10 +41,6 @@ SCOUT_FANOUT = 4        # scouts tried first for a contact
 SCOUT_FALLBACK = 8      # scouts tried when none of the first SCOUT_FANOUT gives a valid child
 FULL_INSERT_TASKS = 4   # tours up to this long try every insertion position, not only 3
 REORDER_TASKS = 6       # tours up to this long also try deadline- and start-ordered tours
-# Beam expansion tries the append position plus this many cheapest insertion positions
-# first (no reordered tours); the full insertion/reorder set stays the fallback round.
-# 0: append only, as before.
-BEAM_INSERT_POSITIONS = 2
 # Rebuilt tours keep earlier visits within a few seconds of the parent's (other altitude or
 # departure shift); the reachability bound subtracts this much from the parent's times.
 REACH_SLACK_S = 20.0
@@ -1344,9 +1340,8 @@ class Search:
     def children(self, parent, contact, stop, limit=2, insert=False):
         """Bounded candidate generation, recording how far each attempt got.
 
-        insert=False appends the visit to a scout tour; "cheap" (beam search) also tries
-        the BEAM_INSERT_POSITIONS cheapest earlier positions first; insert=True tries the
-        cheapest positions and reordered tours (repair, LNS).
+        insert=False appends the visit to a scout tour (beam search); insert=True
+        also tries the cheapest earlier tour positions (LNS repair).
         """
         if contact.id in parent.served:
             return
@@ -1432,10 +1427,8 @@ class Search:
     def tour_orders(scout, current, contact, insert, skip_append=False):
         """Visit orders (contact ids) to try, with whether earlier visits keep the parent's order.
 
-        Append mode: the new visit goes last. "cheap": the append order plus the
-        BEAM_INSERT_POSITIONS cheapest insertion positions. Insert mode: the cheapest
-        insertion positions (every position for short tours), then deadline-ordered and
-        start-ordered tours; "rest" is insert mode without the "cheap" orders.
+        Append mode: the new visit goes last. Insert mode: the cheapest insertion positions
+        (every position for short tours), then deadline-ordered and start-ordered tours.
         """
         cids = tuple(t["cid"] for t in current)
         orders, seen = [], set()
@@ -1445,22 +1438,9 @@ class Search:
                 seen.add(order)
                 orders.append((order, keeps_prefix))
 
-        def cheap():
-            k = min(BEAM_INSERT_POSITIONS, len(current) + 1)
-            positions = insertion_positions(scout.home, current, contact.pos, k)
-            if len(current) not in positions:
-                positions.append(len(current))
-            return [cids[:pos] + (contact.id,) + cids[pos:] for pos in positions]
-
         if not insert:
             add(cids + (contact.id,), True)
             return orders
-        if insert == "cheap":
-            for order in cheap():
-                add(order, True)
-            return orders
-        if insert == "rest":
-            seen.update(cheap())
         if skip_append:
             seen.add(cids + (contact.id,))
         k = len(current) + 1 if len(current) <= FULL_INSERT_TASKS else 3
@@ -1514,17 +1494,15 @@ class Search:
         """Bounded candidate generation: alternate scouts, teams and flight settings.
 
         Rounds stop at the first one that yields a child: the nearest scouts as asked
-        (append, "cheap" or insert), then (append and "cheap" modes) the same scouts with
-        the remaining insertion and reordering orders, then the next SCOUT_FALLBACK - SCOUT_FANOUT scouts with insertion.
+        (append or insert), then (append mode) the same scouts with insertion and
+        reordering, then the next SCOUT_FALLBACK - SCOUT_FANOUT scouts with insertion.
         """
         groups = self.matrix.groups(contact, parent.used) if contact.cls == HOSTILE else [()]
         if not groups:
             self._progress(stats, progress, "no_team")
             return
         rounds = [self.scout_options(parent, contact, insert)]
-        if insert == "cheap":
-            rounds.append(self.scout_options(parent, contact, "rest"))
-        elif not insert:
+        if not insert:
             rounds.append(self.scout_options(parent, contact, True, skip_append=True))
         rounds.append(self.scout_options(parent, contact, True, slice(SCOUT_FANOUT, SCOUT_FALLBACK)))
         state = {"count": 0, "seen": set()}
@@ -1673,9 +1651,7 @@ class Search:
                     allowance = min(0.12, max(0.005, (self.checker.stop-time.monotonic()) / (remaining*1.5)))
                     local_stop = min(self.checker.stop, time.monotonic()+allowance)
                     try:
-                        mode = "cheap" if BEAM_INSERT_POSITIONS else False
-                        for child, decision in self.children(parent, contact, local_stop,
-                                                             insert=mode):
+                        for child, decision in self.children(parent, contact, local_stop):
                             next_beam.append(self.record(child, parent, decision, depth))
                     except DeadlineReached:
                         self.checker.check_time()  # Local cap expires without ending search.
