@@ -340,9 +340,14 @@ About 9 messages per aircraft per minute and under 0.2 ms per call. The remainin
 `analysis/linkloss_knowledge.py` records what every drone knew, second by second, and where each fact came from (`self`, `plan`, `sensed`, `heard` with the sender, `inferred`), plus believed versus real peer positions whenever two drones are within 200 m, event learning time against the time it was needed, and a timeline around each separation failure. The recorder never changes a run (tested).
 
 ```sh
-python3 analysis/linkloss_knowledge.py --history --note "what changed" \
-  --levels L1,L2,L3,L4 --seeds 0-4 --settings 1000x200,250x50 --workers 8
-python3 analysis/linkloss_knowledge.py compare      # every stored collection, per setting
+python3 analysis/linkloss_knowledge.py --history --note "what changed" --policy my_policy.py \
+  --levels L1,L2,L3,L4 --seeds 0-4 --settings 250x200,500x200,1000x200,2000x200 --comm-seeds 3 --workers 12
+python3 analysis/linkloss_knowledge.py compare                 # every stored collection, per setting
+python3 analysis/linkloss_knowledge.py diff BEFORE_DIR AFTER_DIR  # run by run: fixed, broken
 ```
+
+Compare policies with at least 3 comm seeds: extra messages change the random delivery draws of the whole run, and with one seed off and store-and-forward looked like 6 against 15 failures, which 3 seeds showed to be 19 against 22 in 240 runs. Capacity made no difference so far, so one capacity per range is enough. A full 20-setting collection is about 25 MB: store in `history/` the collections worth keeping and use `output/` (the default without `--history`) for the rest.
+
+**Using news in your own policy.** Everything is in `policy.py` and can be copied as is: the codec (`encode_records`, `decode_records`, contacts numbered in scenario order, `cw` digits wide), `_learn` (decodes the inbox into `reclassified`, `zones`, `confirmed`, `peer_state`), `_note_news` and `_forward` (store and forward), `_peer_where` (peer prediction from the plan, including drones on the ground). A policy that keeps the same attribute names (`reclassified`, `zones`, `confirmed`, `peer_state`, `aborted`, `rate`, `_peer_pos`, `peers`) is fully recorded by the knowledge store; others can define `knowledge()` returning `{fact: value}`.
 
 `--history` stores the collection in Git-tracked `history/linkloss/<id>/` (one directory per collection, about 5-6 MB for 80 runs): `collection.json` (note, settings, policy SHA-256, kit hash, Git state, per-setting S_loss), the exact `policy.py`, `runs.jsonl`, `report.md`, `cases/*.json.gz` (scenario, plan, events) and `runs/*.json.gz` (`summary`, `facts`, `steps`, `near`). Load with `load_run`, `load_case`, `iter_collections`. Without `--history` it writes under ignored `output/`. Plans are the greedy baseline, as in `check_policy.py`.
