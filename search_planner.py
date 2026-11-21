@@ -29,13 +29,198 @@ class DeadlineReached(Exception):
 DESTROY_OPERATORS = ("random", "related", "worst", "tour")
 
 
+# Scout candidate generation.
+SCOUT_FANOUT = 4        # scouts tried first for a contact
+SCOUT_FALLBACK = 8      # scouts tried when none of the first SCOUT_FANOUT gives a valid child
+FULL_INSERT_TASKS = 4   # tours up to this long try every insertion position, not only 3
+REORDER_TASKS = 6       # tours up to this long also try deadline- and start-ordered tours
+# Rebuilt tours keep earlier visits within a few seconds of the parent's (other altitude or
+# departure shift); the reachability bound subtracts this much from the parent's times.
+REACH_SLACK_S = 20.0
+
+_tours = {}
+
+# Scout cruise speed. The kit flies scouts at min(0.95 v_h, best-range speed). Energy per
+# metre is flat near the best-range speed (on L4, 0.98 v_h costs +0-1.5% per metre) while
+# airtime, hence hover-free p0 energy, R1 (home by the horizon) and window reach, improve
+# by 5-35%. For scouts whose best-range speed exceeds 0.95 v_h the kit speed is both slower
+# and dearer. R2 allows v_h exactly; 0.98 keeps a 2% margin.
+SCOUT_CRUISE = 0.98
+# "fast": every scout leg at SCOUT_CRUISE * v_h. "eco": the kit's speed. "hybrid": the kit's
+# speed, falling back to fast when the eco tour misses a window, the horizon or the battery.
+# Set per run by Search(scout_speed=...); planner.py --scout-speed.
+SCOUT_SPEEDS = ("fast", "eco", "hybrid")
+SCOUT_SPEED_MODE = "fast"
+# Contacts are on the ground; the 3D observation range allows a horizontal offset of
+# sqrt(R_obs^2 - z^2): ~133 m at 70 m, ~102 m at 110 m. The kit always uses 100 m.
+OBS_MARGIN_M = 8.0
+# Set per run by Search(obs_stretch=...); planner.py --obs-stretch / --no-obs-stretch.
+OBS_STRETCH = True
+
+
+def eco_speed(scout):
+    return min(SPEED_FACTOR * scout.v_h_mps, best_range_speed(scout.power))
+
+
+def fast_speed(scout):
+    return max(eco_speed(scout), SCOUT_CRUISE * scout.v_h_mps)
+
+
+def obs_offset(scenario, contact, z):
+    """Horizontal observation offset toward home for a scout at altitude z."""
+    if not OBS_STRETCH:
+        return baseline.OBS_OFFSET_M
+    reach = scenario.rules.R_obs_m - OBS_MARGIN_M
+    dz = z - contact.pos[2]
+    if reach <= abs(dz):
+        return baseline.OBS_OFFSET_M
+    return max(baseline.OBS_OFFSET_M, math.sqrt(reach * reach - dz * dz))
+
+
+def obs_point(scenario, scout, contact, angle, z):
+    ux, uy = baseline._toward_home(contact, scout.home, angle)
+    off = obs_offset(scenario, contact, z)
+    return contact.pos[0] + ux * off, contact.pos[1] + uy * off
+
+
+def build_scout_route(scout, tasks, depart, z, scenario, speed):
+    """The kit's _scout_route with an explicit cruise speed (same waypoints at the kit speed)."""
+    rules_ = scenario.rules
+    detour, length, wp = baseline._detour, baseline._length, baseline._wp
+    home = scout.home
+    above = (home[0], home[1], z)
+    t = depart
+    wps = [wp(t, home)]
+    t += z / (SPEED_FACTOR * scout.v_up_mps) + 0.5
+    wps.append(wp(t, above))
+    cur = above
+    for task in tasks:
+        px, py = task["point"]
+        cpos = task.get("cpos")
+        if cpos is not None:
+            # A point stretched for 70 m may be out of range when the tour flies at 110 m.
+            reach = rules_.R_obs_m - OBS_MARGIN_M
+            h = math.sqrt(max(0.0, reach * reach - (z - cpos[2]) ** 2))
+            d = math.hypot(px - cpos[0], py - cpos[1])
+            if d > h:
+                px, py = cpos[0] + (px - cpos[0]) * h / d, cpos[1] + (py - cpos[1]) * h / d
+        target = (px, py, z)
+        path = detour([cur, target], scenario)
+        if path is None:
+            return None
+        total = length(path)
+        lo, hi = task["window"]
+        arrive = max(t + total / speed, lo)
+        if arrive + rules_.obs_dwell_s > hi:
+            return None
+        for k in range(1, len(path) - 1):
+            wps.append(wp(t + (arrive - t) * length(path[:k + 1]) / total, path[k]))
+        wps.append(wp(arrive, target, action="observe", target_id=task["cid"],
+                      dwell_s=rules_.obs_dwell_s))
+        t = arrive + rules_.obs_dwell_s
+        cur = target
+    path = detour([cur, above], scenario)
+    if path is None:
+        return None
+    total = length(path)
+    arrive = t + total / speed
+    for k in range(1, len(path) - 1):
+        wps.append(wp(t + (arrive - t) * length(path[:k + 1]) / total, path[k]))
+    wps.append(wp(arrive, above))
+    wps.append(wp(arrive + z / (SPEED_FACTOR * scout.v_down_mps) + 0.5, home))
+    for w in wps:
+        if "target_id" in w:
+            w["target"] = w.pop("target_id")
+    return wps
+
+
+def raw_energy_wh(route, scout):
+    """route_energy_wh on raw waypoint dicts (same formula as fleetkit.energy)."""
+    p = scout.power
+    total = 0.0
+    for a, b in zip(route, route[1:]):
+        dep = a["t"] + a.get("dwell_s", 0.0)
+        d = b["t"] - dep
+        if d > 0:
+            v = math.hypot(b["x"] - a["x"], b["y"] - a["y"]) / d
+            total += (p.p0_w + p.k_v * v * v) * d / 3600.0 + p.e_climb_wh_per_m * max(0.0, b["z"] - a["z"])
+        total += p.p0_w * b.get("dwell_s", 0.0) / 3600.0
+    return total
+
+
+def _depart(scout, tasks, z, speed, shift):
+    travel = hdist(scout.home, tasks[0]["point"]) / speed + z / scout.v_up_mps + 3.0
+    return max(0.0, tasks[0]["window"][0] - travel) + shift
+
+
+def _build_tour(scenario, scout, tasks, z, shift, depart):
+    if SCOUT_SPEED_MODE == "eco":
+        speeds = (eco_speed(scout),)
+    elif SCOUT_SPEED_MODE == "fast":
+        speeds = (fast_speed(scout),)
+    else:
+        speeds = (eco_speed(scout), fast_speed(scout))
+    route = None
+    for speed in speeds:
+        start = _depart(scout, tasks, z, speed, shift) if depart is None else depart
+        route = build_scout_route(scout, tasks, start, z, scenario, speed)
+        if route is not None and len(speeds) > 1 and speed != speeds[-1]:
+            if (route[-1]["t"] > scenario.horizon_s + EPS
+                    or raw_energy_wh(route, scout) > scout.usable_wh + EPS):
+                continue
+        if route is not None:
+            return route
+    return route
+
+
 def scout_tour(scenario, scout, tasks, z, shift=0.0, depart=None):
-    """Baseline scout tour for an ordered task list; same departure rule as the baseline."""
-    if depart is None:
-        speed = min(SPEED_FACTOR * scout.v_h_mps, best_range_speed(scout.power))
-        travel = hdist(scout.home, tasks[0]["point"]) / speed + z / scout.v_up_mps + 3.0
-        depart = max(0.0, tasks[0]["window"][0] - travel) + shift
-    return _scout_route(scout, tasks, depart, z, scenario)
+    """Scout tour for an ordered task list; same departure rule as the baseline.
+
+    Memoised: sibling branches rebuild identical tours many times. Routes are never edited
+    after construction, so the waypoint dicts are shared; the list itself is a copy.
+    """
+    key = (id(scenario), scout.id, z, shift, depart, SCOUT_SPEED_MODE, OBS_STRETCH,
+           tuple((t["cid"], tuple(t["point"]), tuple(t["window"])) for t in tasks))
+    hit = _tours.get(key)
+    if hit is None or hit[0] is not scenario:
+        if len(_tours) > 100000:
+            _tours.clear()
+        hit = _tours[key] = (scenario, _build_tour(scenario, scout, tasks, z, shift, depart))
+    return None if hit[1] is None else list(hit[1])
+
+
+def scout_reachable(scenario, scout, tasks, pos, z, prev_route=None):
+    """False only when the tour must fail: the scout tour builder misses the window of
+    tasks[pos], or the scout cannot be home before the horizon (R1).
+
+    Lower bounds only: the builder flies at most `speed` along paths no shorter than straight
+    lines, departs at t >= 0, and cannot observe before a window opens. prev_route, the
+    parent's route for the same earlier tasks, tightens the bound on the previous visit.
+    """
+    rules_ = scenario.rules
+    speed = eco_speed(scout) if SCOUT_SPEED_MODE == "eco" else fast_speed(scout)
+    climb = z / (SPEED_FACTOR * scout.v_up_mps) + 0.5
+    descend = z / (SPEED_FACTOR * scout.v_down_mps) + 0.5
+    task = tasks[pos]
+    lo, hi = task["window"]
+    # Stretched observation points may be pulled in by up to ~35 m at 110 m altitude.
+    slack = 2 * 35.0 / speed if OBS_STRETCH else 0.0
+    arrive = climb + hdist(scout.home, task["point"]) / speed - slack
+    if pos > 0:
+        prev = tasks[pos - 1]
+        prev_done = prev["window"][0] + rules_.obs_dwell_s
+        if prev_route is not None:
+            for w in prev_route:
+                if w.get("action") == "observe" and w.get("target") == prev["cid"]:
+                    prev_done = max(prev_done, w["t"] + w.get("dwell_s", 0.0) - REACH_SLACK_S)
+                    break
+        arrive = max(arrive, prev_done + hdist(prev["point"], task["point"]) / speed - slack)
+    finish = max(arrive, lo) + rules_.obs_dwell_s
+    if finish > hi + EPS:
+        return False
+    # Every remaining path back home is at least the straight line.
+    return (finish + hdist(task["point"], scout.home) / speed - slack + descend
+            <= scenario.horizon_s + EPS)
 
 
 def insertion_positions(home, tasks, pos, limit):
@@ -261,11 +446,18 @@ class WarmPlanner(_Planner):
 
 class Search:
     def __init__(self, scenario, seconds=55.0, top_n=5, beam_width=6, start=None, lns_share=0.4,
-                 interleave=False, adaptive=False, restarts=True):
+                 interleave=False, adaptive=False, restarts=True, widen=False,
+                 scout_speed="fast", obs_stretch=True):
         if seconds < 0 or not 1 <= top_n <= 100 or not 1 <= beam_width <= 100:
             raise ValueError("seconds must be nonnegative; top_n and beam_width must be 1..100")
         if not 0 <= lns_share <= 1:
             raise ValueError("lns_share must be 0..1")
+        if scout_speed not in SCOUT_SPEEDS:
+            raise ValueError(f"scout_speed must be one of {SCOUT_SPEEDS}")
+        # Scout tour settings are module-wide (tour cache and helpers); one Search per run.
+        global SCOUT_SPEED_MODE, OBS_STRETCH
+        SCOUT_SPEED_MODE, OBS_STRETCH = scout_speed, bool(obs_stretch)
+        self.scout_speed, self.obs_stretch = scout_speed, bool(obs_stretch)
         self.sc = scenario
         self.start = time.monotonic() if start is None else start
         # Includes input reading when the CLI passes its process start time.
@@ -279,6 +471,8 @@ class Search:
         self.lns = {"iterations": 0, "accepted": 0, "improvements": 0, "gain": 0.0}
         self.lns_share = lns_share
         self.interleave, self.adaptive, self.restarts = interleave, adaptive, restarts
+        # Later passes keep a wider beam: more outranked branches survive to the end.
+        self.widen = widen
         if interleave:
             # Beam passes alternate with LNS bursts; a short final tail is LNS only.
             self.beam_stop = self.stop - min(lns_share, 0.1) * max(0.0, self.stop - self.start)
@@ -360,10 +554,13 @@ class Search:
         if stage >= progress["stage"]:
             progress["stage"], progress["outcome"] = stage, outcome
 
-    def scout_options(self, parent, contact, insert):
-        """(scout, tasks, route or None) for each scout, tour position and flight setting."""
-        p = _Planner(self.sc)
-        scouts = p._scout_candidates(contact, limit=len(parent.tasks))
+    def ranked_scouts(self, parent, contact, insert):
+        """Scouts by distance from their tour (insert) or tour end (append) to the contact.
+
+        If the first SCOUT_FANOUT are all busy, the nearest idle scout takes the last slot:
+        all scouts may share a base, so an idle one is often the only one that fits.
+        """
+        scouts = _Planner(self.sc)._scout_candidates(contact, limit=len(parent.tasks))
         if insert:
             def reach(a):
                 points = [a.home] + [t["point"] for t in parent.tasks[a.id]]
@@ -372,27 +569,98 @@ class Search:
         else:
             scouts.sort(key=lambda a: hdist(parent.tasks[a.id][-1]["point"] if parent.tasks[a.id]
                                            else a.home, contact.pos))
-        for scout in scouts[:4]:
+        head = scouts[:SCOUT_FANOUT]
+        if head and all(parent.tasks[a.id] for a in head):
+            idle = next((a for a in scouts[SCOUT_FANOUT:] if not parent.tasks[a.id]), None)
+            if idle is not None:
+                scouts = head[:-1] + [idle] + [a for a in scouts[SCOUT_FANOUT - 1:] if a is not idle]
+        return scouts
+
+    @staticmethod
+    def tour_orders(scout, current, contact, insert, skip_append=False):
+        """Visit orders (contact ids) to try, with whether earlier visits keep the parent's order.
+
+        Append mode: the new visit goes last. Insert mode: the cheapest insertion positions
+        (every position for short tours), then deadline-ordered and start-ordered tours.
+        """
+        cids = tuple(t["cid"] for t in current)
+        orders, seen = [], set()
+
+        def add(order, keeps_prefix):
+            if order not in seen:
+                seen.add(order)
+                orders.append((order, keeps_prefix))
+
+        if not insert:
+            add(cids + (contact.id,), True)
+            return orders
+        if skip_append:
+            seen.add(cids + (contact.id,))
+        k = len(current) + 1 if len(current) <= FULL_INSERT_TASKS else 3
+        for pos in insertion_positions(scout.home, current, contact.pos, k):
+            add(cids[:pos] + (contact.id,) + cids[pos:], True)
+        if 1 <= len(current) <= REORDER_TASKS:
+            windows = {t["cid"]: tuple(t["window"]) for t in current}
+            windows[contact.id] = tuple(contact.window)
+            add(tuple(sorted(windows, key=lambda c: (windows[c][1], windows[c][0], c))), False)
+            add(tuple(sorted(windows, key=lambda c: (windows[c][0], windows[c][1], c))), False)
+        return orders
+
+    def scout_options(self, parent, contact, insert, ranks=slice(0, SCOUT_FANOUT),
+                      skip_append=False):
+        """(scout, tasks, route or None) for each scout, visit order and flight setting.
+
+        Orders that cannot reach the new visit in its window, or get home before the
+        horizon, yield None without building a route.
+        """
+        p = _Planner(self.sc)
+        for scout in self.ranked_scouts(parent, contact, insert)[ranks]:
             current = parent.tasks[scout.id]
-            positions = (insertion_positions(scout.home, current, contact.pos, 3) if insert
-                         else [len(current)])
-            for pos, z, obs_angle, shift in itertools.product(positions, SCOUT_LAYERS,
-                                                               (0.0, 60.0, -60.0), (0.0, 7.0)):
-                task = {"cid": contact.id, "point": p._obs_point(scout, contact, obs_angle),
-                        "window": contact.window}
-                tasks = current[:pos] + [task] + current[pos:]
-                yield scout, tasks, scout_tour(self.sc, scout, tasks, z, shift)
+            by_id = {t["cid"]: t for t in current}
+            prev_route = parent.routes.get(scout.id)
+            for order, keeps_prefix in self.tour_orders(scout, current, contact, insert, skip_append):
+                pos = order.index(contact.id)
+                for z, obs_angle, shift in itertools.product(SCOUT_LAYERS, (0.0, 60.0, -60.0),
+                                                             (0.0, 7.0)):
+                    task = {"cid": contact.id,
+                            "point": obs_point(self.sc, scout, contact, obs_angle, z),
+                            "window": contact.window, "cpos": contact.pos}
+                    tasks = [task if cid == contact.id else by_id[cid] for cid in order]
+                    if not scout_reachable(self.sc, scout, tasks, pos, z,
+                                           prev_route if keeps_prefix else None):
+                        yield scout, tasks, None
+                        continue
+                    yield scout, tasks, scout_tour(self.sc, scout, tasks, z, shift)
 
     def _children(self, parent, contact, stop, limit, stats, progress, insert=False):
-        """Bounded candidate generation: alternate scouts, teams and flight settings."""
+        """Bounded candidate generation: alternate scouts, teams and flight settings.
+
+        Rounds stop at the first one that yields a child: the nearest scouts as asked
+        (append or insert), then (append mode) the same scouts with insertion and
+        reordering, then the next SCOUT_FALLBACK - SCOUT_FANOUT scouts with insertion.
+        """
         groups = self.matrix.groups(contact, parent.used) if contact.cls == HOSTILE else [()]
         if not groups:
             self._progress(stats, progress, "no_team")
             return
-        count = 0
-        seen = set()
+        rounds = [self.scout_options(parent, contact, insert)]
+        if not insert:
+            rounds.append(self.scout_options(parent, contact, True, skip_append=True))
+        rounds.append(self.scout_options(parent, contact, True, slice(SCOUT_FANOUT, SCOUT_FALLBACK)))
+        state = {"count": 0, "seen": set()}
+        for options in rounds:
+            for item in self._serve(parent, contact, options, groups, stop, limit, stats,
+                                    progress, state):
+                yield item
+                if state["count"] >= limit:
+                    return
+            if state["count"]:
+                return
+
+    def _serve(self, parent, contact, scout_options, groups, stop, limit, stats, progress, state):
+        seen = state["seen"]
         # Round-robin teams before spending time on fine timing adjustments.
-        for scout, tasks, route in self.scout_options(parent, contact, insert):
+        for scout, tasks, route in scout_options:
             self.checker.check_time(stop)
             if route is None:
                 self._progress(stats, progress, "scout_route")
@@ -421,9 +689,9 @@ class Search:
                 decision = {"kind": "serve", "contact": contact.id, "scout": scout.id,
                             "effectors": [a.id for a in team]}
                 self._progress(stats, progress, "accepted")
+                state["count"] += 1
                 yield candidate, decision
-                count += 1
-                if count >= limit:
+                if state["count"] >= limit:
                     return
 
     def strikes(self, parent, contact, groups, scout, scout_route, obs_end, stop,
@@ -521,7 +789,10 @@ class Search:
                 unique = {}
                 for state in sorted(next_beam, key=lambda s: -s.score):
                     unique.setdefault(state.signature(), state)
-                beam = list(unique.values())[:self.width]
+                width = self.width
+                if self.widen and self.passes >= 4:
+                    width = min(100, self.width + self.width // 2)
+                beam = list(unique.values())[:width]
             self.passes += 1
             if self.interleave and self.lns_share < 1:
                 burst = (time.monotonic() - pass_start) * self.lns_share / (1 - self.lns_share)
@@ -768,6 +1039,7 @@ class Search:
                 "candidate_check_seconds": self.checker.seconds,
                 "rejections": self.checker.rejections,
                 "beam_width": self.width, "requested_top_n": self.top_n,
+                "scouting": {"scout_speed": self.scout_speed, "obs_stretch": self.obs_stretch},
                 "lns": {**self.lns, "variant": {"interleave": self.interleave,
                                                 "adaptive": self.adaptive,
                                                 "restarts": self.restarts},
