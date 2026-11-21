@@ -1306,7 +1306,8 @@ class Search:
 
     def stats(self, cid):
         if cid not in self.attempts:
-            self.attempts[cid] = {"attempts": 0, "warm_accepted": 0, "outcomes": {}, "rules": {}}
+            self.attempts[cid] = {"attempts": 0, "warm_accepted": 0, "outcomes": {}, "rules": {},
+                                  "beam_pruned": 0}
         return self.attempts[cid]
 
     def record(self, state, parent, decision, depth):
@@ -1642,7 +1643,7 @@ class Search:
             beam = [self.root]
             for depth, contact in enumerate(order, 1):
                 self.checker.check_time()
-                next_beam = []
+                next_beam, served = [], []
                 for parent in beam:
                     self.checker.check_time()
                     skipped = self.record(parent, parent, {"kind": "skip", "contact": contact.id}, depth)
@@ -1652,7 +1653,8 @@ class Search:
                     local_stop = min(self.checker.stop, time.monotonic()+allowance)
                     try:
                         for child, decision in self.children(parent, contact, local_stop):
-                            next_beam.append(self.record(child, parent, decision, depth))
+                            served.append(self.record(child, parent, decision, depth))
+                            next_beam.append(served[-1])
                     except DeadlineReached:
                         self.checker.check_time()  # Local cap expires without ending search.
                 unique = {}
@@ -1662,6 +1664,10 @@ class Search:
                 if self.widen and self.passes >= 4:
                     width = min(100, self.width + self.width // 2)
                 beam = list(unique.values())[:width]
+                kept = {state.signature() for state in beam}
+                # Valid serving children cut by the beam width ("outranked" in the beam).
+                self.stats(contact.id)["beam_pruned"] += sum(
+                    1 for state in served if state.signature() not in kept)
             self.passes += 1
             if self.interleave and self.lns_share < 1:
                 burst = (time.monotonic() - pass_start) * self.lns_share / (1 - self.lns_share)
@@ -2242,6 +2248,7 @@ class Search:
             entry = {"cls": c.cls, "points": c.points, "served": c.id in served,
                      "attempts": stats["attempts"] if stats else 0,
                      "outcomes": dict(stats["outcomes"]) if stats else {},
+                     "beam_pruned": stats.get("beam_pruned", 0) if stats else 0,
                      "rules": dict(stats["rules"]) if stats else {}}
             if c.id not in served:
                 reason = unserved_reason(c, banned, stats)
