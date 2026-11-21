@@ -34,6 +34,8 @@ class DeadlineReached(Exception):
 
 
 DESTROY_OPERATORS = ("random", "related", "worst", "tour", "trip", "group")
+TOUR_SHARE = 0.1        # share of LNS steps using "tour" (without --adaptive)
+TOUR_REBUILD = 0.5      # share of "tour" steps that clear the whole tour instead of k visits
 
 
 # Scout candidate generation.
@@ -2161,10 +2163,20 @@ class Search:
             op = "trip"
         elif GROUP_SIZES and roll < TRIP_SHARE * bool(TRIP_SEARCH) + GROUP_SHARE:
             op = "group"
+        elif roll < TRIP_SHARE * bool(TRIP_SEARCH) + GROUP_SHARE * bool(GROUP_SIZES) + TOUR_SHARE:
+            op = "tour"
         else:
             op = "related" if rng.random() < 0.5 else "random"
         removed, trip_centre = [], []
         partial = current
+        rebuild = False
+        if op == "tour" and rng.random() < TOUR_REBUILD:
+            sids = [sid for sid, tasks in current.tasks.items()
+                    if any(t["cid"] in current.served and t["cid"] in by_id for t in tasks)]
+            stripped = self.strip_scout(current, rng.choice(sids)) if sids else (None, ())
+            if stripped[0] is not None:
+                rebuild, partial = True, stripped[0]
+                removed = sorted(c for c in stripped[1] if c in by_id and c not in partial.served)
         if op in ("trip", "group"):
             self.lns[op + "_tried"] += 1
             moved = self.trip_move(current, rng) if op == "trip" else self.group_move(current, rng)
@@ -2174,7 +2186,7 @@ class Search:
                 partial, stripped = moved
                 trip_centre = [by_id[c].pos for c in stripped if c in by_id]
                 removed = [c for c in stripped if c in by_id and c not in partial.served]
-        if served and op not in ("trip", "group"):
+        if served and not rebuild and op not in ("trip", "group"):
             for cid in self.destroy(op, served, by_id, current, priorities, rng):
                 smaller = self.remove(partial, cid)
                 if smaller is not None:
@@ -2200,8 +2212,9 @@ class Search:
                 self.checker.check_time()
             if chosen_child is not None:
                 partial = chosen_child
-        tally = self.lns["ops"].setdefault(op, {"tried": 0, "accepted": 0, "improvements": 0,
-                                                "gain": 0.0})
+        tally = self.lns["ops"].setdefault("tour_rebuild" if rebuild else op,
+                                           {"tried": 0, "accepted": 0, "improvements": 0,
+                                            "gain": 0.0})
         tally["tried"] += 1
         delta = partial.score - current.score
         span = max(1e-6, self.stop - st["begin"])
