@@ -14,6 +14,19 @@ Failure modes the policy guards against (each one sets retention to 0):
   (route time, rate). Each second it picks, among the moves that serve its intent, the one
   that keeps the most room over the next few seconds, and announces its rate when it changes.
 
+Coordination, using what every drone knows of its peers (plan + announced states + news):
+
+- TRUST_PLAN: two aircraft both on schedule are separated by the validated plan, so the
+  separation check skips that pair. Second-guessing it (55 m margin, 75 m exemption) made
+  strike partners at a shared target back off, hold and reverse into one another.
+- EXACT_OBS_END: a scout reports its observation end from its route clock (rounded up), not
+  the second it noticed it; effectors then need only 0.1 s of slack past confirm_margin_s, and
+  no longer slow down just short of a plan that had 12 s between observation and strike.
+- GROUP_SYNC: a confirmed effector holds short while its strike partners' predicted
+  engagements are further behind it than the plan's own spread (or sync window - 6 s).
+- SCOUT_WAIT: an unconfirmed effector waits for a scout it knows is late (from the scout's
+  announced state) for as long as the contact's window allows, instead of a fixed 15 s.
+
 Messages cost score, so the only messages are rate changes, "observed" notices and news of
 a sensed danger (a reclassified contact or a pop-up zone). NEWS_MODE picks how news spreads:
 
@@ -68,6 +81,14 @@ FWD_CLOSE_SHARE = 0.5   # close = within this share of the estimated range (deli
 FWD_FAR_SHARE = 0.95    # far = up to this share of it
 FWD_RANGE_MIN_M = 240.0  # range estimate before anything was heard (the smallest range in the grid)
 MAX_TEXT = 62           # 64 bytes minus the two quotes of a JSON string
+TRUST_PLAN = True       # two aircraft both on schedule are separated by the validated plan: skip the check
+ON_PLAN_S = 0.25        # route-clock offset still counted as on schedule
+GROUP_SYNC = True       # a confirmed effector holds short until its strike partners can engage within sync
+SYNC_SLACK_S = 6.0      # sync window minus this is the spread aimed for
+SCOUT_WAIT = True       # an unconfirmed effector waits for a late scout while its window allows
+SCOUT_WAIT_PAD_S = 5.0
+EXACT_OBS_END = True    # a scout reports its observation end from its route clock, not the step it noticed it
+CONFIRM_SLACK_S = 0.1
 
 # ---------------------------------------------------------------------- compact wire format
 ALPHABET = "".join(chr(c) for c in range(32, 127) if chr(c) not in '"\\')
@@ -174,7 +195,9 @@ class Policy:
         self.cw = 1 if len(self.contact_ids) <= BASE else 2
         self.news = {}                 # danger key -> {"rec", "left", "next", "echoes", "informed", ...}
         self.heard_max_d = 0.0         # farthest distance a peer was heard from (estimates the range)
-        self.margin = rules.confirm_margin_s + 1.5   # observation end to engagement, with slack
+        # observation end to engagement: reported ends are rounded up, so a small slack suffices
+        self.margin = rules.confirm_margin_s + (CONFIRM_SLACK_S if EXACT_OBS_END else 1.5)
+        self.own_obs_end = {wp.target: wp.t + wp.dwell_s for wp in self.route.waypoints if wp.action == "observe"}
         self.target = self._target(self.route, self.ac)
         self.engage_t = self.route.waypoints[-1].t if self.target else None
         self.peers = {}
@@ -189,6 +212,19 @@ class Policy:
                     self.obs_end.setdefault(wp.target, []).append(wp.t + wp.dwell_s)
                 elif wp.action == "engage" and aircraft[aid].type == EFFECTOR:
                     self.last_engage[wp.target] = max(self.last_engage.get(wp.target, 0.0), wp.t)
+        self.sync_s = rules.sync_window_s
+        self.group = [aid for aid, (_, tgt) in self.peers.items() if self.target is not None and tgt == self.target]
+        self.obs_wp = {}               # contact -> [(scout id, planned route time the observation ends)]
+        for aid, r in routes.items():
+            if aid != aircraft_id and aircraft[aid].type == SCOUT:
+                for wp in r.waypoints:
+                    if wp.action == "observe":
+                        self.obs_wp.setdefault(wp.target, []).append((aid, wp.t + wp.dwell_s))
+        # spread from my engagement to the latest partner's that is tolerated: what the plan has, or more
+        planned = [self.peers[a][0].end - self.engage_t for a in self.group] if self.target else []
+        self.sync_spread = min(self.sync_s - 0.5, max([self.sync_s - SYNC_SLACK_S] + [p + 0.5 for p in planned]))
+        c = self.contacts.get(self.target) if self.target else None
+        self.window_end = c.window[1] if (c is not None and c.window) else None
         self.confirmed = None
         self.reclassified, self.zones = set(), []
         self.announce, self.reported = {}, {}
@@ -338,6 +374,8 @@ class Policy:
                     p = clock.pos[0]   # still on the ground, takes off within the look-ahead
             if p is not None and _d(p, here) < NEAR_M:
                 near.append(aid)
+        if TRUST_PLAN and self._on_plan(t, tau, rate):
+            near = [aid for aid in near if not self._peer_on_plan(aid, t)]
         best = math.inf
         for i in range(1, SAMPLES + 1):
             dt = HORIZON_S * i / SAMPLES
@@ -363,6 +401,54 @@ class Policy:
                     best = min(best, _d(me, p))
         return best
 
+    # ------------------------------------------------------------------ coordination
+    def _peer_eta(self, aid, tau_end, t):
+        """Predicted real time a peer reaches route time `tau_end`, from its announced state (None if not moving)."""
+        tau0, rate, t0 = self.peer_state.get(aid, (None, 1.0, None))
+        if tau0 is None:
+            return tau_end                       # on plan
+        tau_now = tau0 + rate * (t - t0)
+        if tau_now >= tau_end:
+            return t
+        if rate <= 0.0:
+            return t + (tau_end - tau_now)       # held or turning: at best it resumes now
+        return t + (tau_end - tau_now) / rate
+
+    def _group_latest(self, t):
+        """Latest predicted engagement among strike partners still expected to engage."""
+        latest = -math.inf
+        for aid in self.group:
+            clock = self.peers[aid][0]
+            tau0, rate, _ = self.peer_state.get(aid, (None, 1.0, None))
+            if rate < 0.0:
+                continue                         # turned back: not waited for
+            eta = self._peer_eta(aid, clock.end, t)
+            if eta >= t - 1.0 or tau0 is None:
+                latest = max(latest, eta)
+        return latest
+
+    def _grace_until(self, t):
+        """How long an unconfirmed effector waits: the fixed grace, or longer for a scout known to be late."""
+        until = self.engage_t + HOLD_GRACE_S
+        if not SCOUT_WAIT:
+            return until
+        for aid, tau_end in self.obs_wp.get(self.target, []):
+            if aid in self.peer_state and self.peer_state[aid][1] >= 0.0:
+                until = max(until, self._peer_eta(aid, tau_end, t) + self.margin + SCOUT_WAIT_PAD_S)
+        if self.window_end is not None:
+            until = min(until, max(self.engage_t + HOLD_GRACE_S, self.window_end))
+        return until
+
+    def _on_plan(self, t, tau, rate):
+        return rate == 1.0 and abs(tau - t) <= ON_PLAN_S and not self.aborted
+
+    def _peer_on_plan(self, aid, t):
+        st = self.peer_state.get(aid)
+        if st is None:
+            return True
+        tau0, rate, t0 = st
+        return rate == 1.0 and abs(tau0 - t0) <= ON_PLAN_S
+
     # ------------------------------------------------------------------ decision
     def _options(self, obs):
         """Rates that serve the intent, in order of preference, and whether engaging is allowed."""
@@ -371,13 +457,16 @@ class Policy:
             self.aborted = True
         if self.target is not None and self.target in self.reclassified:
             self.aborted = True
-        if self.target is not None and not self.aborted and self.target not in self.confirmed                 and t > self.engage_t + HOLD_GRACE_S:
+        if self.target is not None and not self.aborted and self.target not in self.confirmed \
+                and t > self._grace_until(t):
             self.aborted = True
         if self.aborted:
             return [-1.0, 0.0, 0.5, 1.0], False
         if self.target is not None and self.target in self.confirmed:
             if t + (self.engage_t - tau) < self.confirmed[self.target] + self.margin:
                 return [1.0, 0.5, 0.0, -1.0], False   # confirmed too recently: not yet
+            if GROUP_SYNC and self._group_latest(t) - (t + (self.engage_t - tau)) > self.sync_spread:
+                return [1.0, 0.5, 0.0, -1.0], False   # partners are late: wait for them
             return [1.0, 0.5, 0.0, -1.0], True
         if self.target is not None:
             return [1.0, 0.5, 0.0, -1.0], False       # unconfirmed: approach, never engage
@@ -418,15 +507,24 @@ class Policy:
                   else {"kind": "return"} if choice == -1.0 else {"kind": "speed", "scale": choice})
         return action, self._message(obs, tau, choice)
 
+    def _obs_end_report(self, c, obs):
+        """Whole second at or after the real end of my observation of `c` (it ended during the last step)."""
+        t, tau = obs["t"], obs["tau"]
+        end = t
+        if EXACT_OBS_END and c in self.own_obs_end and self.rate == 1.0:
+            # moving at full rate over the last step: the end lies (tau - tau_end) seconds back
+            end = min(t, max(t - 1.0, t - (tau - self.own_obs_end[c])))
+        return int(math.ceil(end - 1e-6))
+
     def _message(self, obs, tau, rate):
         t = obs["t"]
         records = []
         if self.ac.type == SCOUT:
             for c in obs["own_observed"]:
                 if c not in self.reported:
-                    self.reported[c] = int(math.ceil(t))   # it ended during the last step
+                    self.reported[c] = self._obs_end_report(c, obs)
                     if c in self.last_engage:
-                        self.announce[c] = self.last_engage[c] + ANNOUNCE_AFTER_S
+                        self.announce[c] = max(self.last_engage[c], t) + ANNOUNCE_AFTER_S
             live = sorted(c for c, until in self.announce.items() if t <= until)
             records += [("O", self.contact_index[c], self.reported[c]) for c in live[:2]]
         changed = self.sent is None and rate != 1.0 or self.sent is not None and rate != self.sent[0]
