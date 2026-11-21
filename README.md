@@ -176,6 +176,24 @@ Same inputs, master vs this change, both with two concurrent benchmark workers p
 
 All plans were valid. Gains come from L4 (e.g. L4-401 1077.92 → 1118.71, L4-0 at 20 s 834.78 → 861.03); L1–L3 mostly tie but finish sooner. L4-402 regressed (613.23 → 593.99) and L4-2 at 20 s slightly (447.65 → 446.43): faster checks change which branches fit in the local time caps, so individual cases vary.
 
+### Scout trip label search
+
+On L4 the scouts are the bottleneck: they fly 9–16 km for 2–6 observations, and the choice of contacts each one chains matters more than how its route is shaped. `trip_labels` finds the best-value trips for one scout by resource-constrained label setting. A label is a chain of visits, with its finish time, Wh used, net value and visited set. Legs are straight lines using the `tour_estimate` speed, departure and energy model. Hostiles must also finish early enough for confirmation and their cheapest free team. Dominated labels are dropped, and each contact keeps at most 6. A run takes 1–8 ms per scout on L4. The search is used in two ways:
+
+- **LNS operator `trip`** (`TRIP_SEARCH`, 20% of LNS steps): removes one scout's tour and the strikes it confirms, then rebuilds it visit by visit from a better trip through `_serve`, retrying layers, angles and takeoff shifts. It reports `trip_tried`/`trip_accepted`/`trip_improvements`/`trip_gain` in the `lns` block.
+- **Trip-plan warm start** (`TRIP_PLAN`, at most 20% of the start-to-beam-end time): generates candidate trips for every scout at 70 m and 30 m. The candidates are the best trips, the best trip including each contact, the best trip without each of its two most valuable contacts, and two rounds of re-planning each scout around the others' chosen trips. Without that variety, every scout's top trips share the same few contacts and nothing can be traded. `pack_trips` then picks at most one trip per scout with no contact twice (weighted set packing: greedy, then swaps). The chosen plan is realised in observation-time order, recorded and repaired. Stats are in the `trip_plan` block.
+
+Same-run comparisons, 17 scenarios (8 board validation, L4 seeds 9–14, L3 seeds 3–5), 4 workers, default 45 s, all plans valid:
+
+| Run | base (035a098) | + trip LNS | + trip plan |
+|---|---:|---:|---:|
+| run 1 total | 13807.5 | 13889.4 | – |
+| run 2 total | 13740.3 | 13750.5 | 13918.9 |
+| run 2 L4 subtotal | 9907.7 | 9917.2 | 10074.5 |
+| run 2 board-8 subtotal | 4790.5 | 4821.3 | 4823.6 |
+
+Repeat runs of the same code differ by 0.4–1% in total; in a third run the committed version scored 14027.9. Step 2's gain over step 1 comes mostly from two large wins (L4-11 +104, L4-14 +53); it won 9 cases and lost 6. Under 4 parallel workers the trip plan reaches its time cap before realisation finishes on the largest cases. Two variants scored lower in the same run: capping generation at 40% of the share (−37) and generating at one layer only (−133).
+
 ### Local benchmark results
 
 Measured on this machine with five-second search budgets. These are sampled scenarios, not a guarantee of performance on unseen inputs.
