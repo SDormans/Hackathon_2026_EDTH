@@ -171,3 +171,32 @@ Copy `planner.py`, `search_planner.py`, `candidate_matrix.py` and `tree_view.py`
 The original analysis and isolated-mission checker remain in [analysis/](analysis/README.md).
 
 Development and agent guidance, including test and benchmark commands, is in [AGENTS.md](AGENTS.md).
+
+### Persistent optimisation history
+
+Run benchmarks through `test_logger.py` to keep an independent record of every batch:
+
+```sh
+python test_logger.py --cases L1:0 L2:7 L3:1 L4:0 --seconds 5 --note "Before optimisation"
+python test_logger.py --cases L1:0 L2:7 L3:1 L4:0 --seconds 5 --note "After optimisation"
+python test_logger.py summary
+```
+
+With no options it runs L1-L4, seeds 0-2, at 55 seconds per case with one worker.
+Each invocation creates a unique directory in `output/test-history/`; older runs are
+never overwritten. `result.json` includes official points, per-case and aggregate
+planner runtimes, baseline gains, validity/failures, served contacts, search diagnostics,
+settings, UTC timestamps, source SHA-256 hashes, Git state and machine/Python details.
+The `benchmark/` subdirectory keeps scenarios, both plans, process logs, JSON/CSV
+results and the HTML report. `--history` chooses another history directory.
+
+The logger reports score and runtime changes against the latest completed batch
+with identical cases, budgets, worker count, environment and official-kit hashes.
+Source hashes distinguish code revisions even with uncommitted edits. Positive score
+deltas and negative runtime deltas indicate improvement; percentage changes from
+zero are null. Failed planners count as zero, and batches with setup errors are not
+used for history comparisons. `summary` exports all run records as JSONL to stdout.
+Runs terminated before final collection retain a `running` record and any benchmark
+artifacts already written. Logging applies when launching through this script;
+direct `planner.py` invocations do not enter this history. Use identical settings
+and one worker for useful comparisons; machine load can still affect results.
