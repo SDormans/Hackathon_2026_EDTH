@@ -89,6 +89,13 @@ SCOUT_WAIT = True       # an unconfirmed effector waits for a late scout while i
 SCOUT_WAIT_PAD_S = 5.0
 EXACT_OBS_END = True    # a scout reports its observation end from its route clock, not the step it noticed it
 CONFIRM_SLACK_S = 0.1
+SAFE_STEP = True        # every move must keep d_sep + STEP_MARGIN_M from every peer's reachable positions this step
+STEP_MARGIN_M = 5.0
+FORMATION_M = 120.0     # an on-schedule peer this close that must stop is expected to stop where it is
+REVERSE_LOOK_S = 8.0    # a reversal must keep clear of on-schedule peers' next seconds
+STALE_CAP_S = 3.0       # route-time drift assumed at most for a silent off-plan peer
+ESCAPE_GAIN_M = 2.0     # with no clear move, leave a hold only for this much more distance
+HEARTBEAT_NEAR_M = 300.0  # an off-plan aircraft re-announces its state every second while a peer is this close
 
 # ---------------------------------------------------------------------- compact wire format
 ALPHABET = "".join(chr(c) for c in range(32, 127) if chr(c) not in '"\\')
@@ -176,6 +183,44 @@ def decode_records(text, cw=1):
 
 def _d(a, b):
     return math.sqrt((a[0] - b[0]) ** 2 + (a[1] - b[1]) ** 2 + (a[2] - b[2]) ** 2)
+
+
+def _seg_dist(p1, q1, p2, q2):
+    """Smallest distance between segments p1-q1 and p2-q2 (3D)."""
+    d1 = [q1[i] - p1[i] for i in range(3)]
+    d2 = [q2[i] - p2[i] for i in range(3)]
+    r = [p1[i] - p2[i] for i in range(3)]
+    a = sum(x * x for x in d1)
+    e = sum(x * x for x in d2)
+    f = sum(d2[i] * r[i] for i in range(3))
+    if a <= 1e-12 and e <= 1e-12:
+        return _d(p1, p2)
+    if a <= 1e-12:
+        s, u = 0.0, min(1.0, max(0.0, f / e))
+    else:
+        c = sum(d1[i] * r[i] for i in range(3))
+        if e <= 1e-12:
+            s, u = min(1.0, max(0.0, -c / a)), 0.0
+        else:
+            b = sum(d1[i] * d2[i] for i in range(3))
+            den = a * e - b * b
+            s = min(1.0, max(0.0, (b * f - c * e) / den)) if den > 1e-12 else 0.0
+            u = (b * s + f) / e
+            if u < 0.0:
+                s, u = min(1.0, max(0.0, -c / a)), 0.0
+            elif u > 1.0:
+                s, u = min(1.0, max(0.0, (b - c) / a)), 1.0
+    x = [p1[i] + d1[i] * s - p2[i] - d2[i] * u for i in range(3)]
+    return math.sqrt(sum(v * v for v in x))
+
+
+def _polyline(clock, lo, hi):
+    """Planned positions over route times [lo, hi] (airborne part only), or None."""
+    lo, hi = max(lo, clock.start), min(hi, clock.end)
+    if hi <= clock.start + 1e-9 or lo >= clock.end - 1e-9 or hi < lo:
+        return None
+    taus = [lo] + clock.breakpoints(lo, hi) + [hi]
+    return [clock.position(x) for x in taus]
 
 
 class Policy:
@@ -494,6 +539,8 @@ class Policy:
         t, tau = obs["t"], obs["tau"]
         options, may_engage = self._options(obs)
         options = [r for r in options if self._allowed(tau, r, may_engage)] or [0.0]
+        if SAFE_STEP:
+            options = self._safe_options(t, tau, options, may_engage)
         choice, best_room = options[0], -1.0
         for r in options:
             room = self._room(t, tau, r)
@@ -506,6 +553,144 @@ class Policy:
         action = ({"kind": "continue"} if choice == 1.0 else {"kind": "hold"} if choice == 0.0
                   else {"kind": "return"} if choice == -1.0 else {"kind": "speed", "scale": choice})
         return action, self._message(obs, tau, choice)
+
+    # ------------------------------------------------------------------ one-step safety filter
+    def _peer_reach(self, aid, t, step=1.0):
+        """Planned positions a peer can occupy during [t, t + step], or None (not airborne)."""
+        clock = self.peers[aid][0]
+        st = self.peer_state.get(aid)
+        if st is None or self._peer_on_plan(aid, t):
+            c, k = t, 0.0
+        else:
+            tau0, rate, t0 = st
+            # decisions after the announced one are unknown; changes are announced at once and repeated,
+            # so a long silence means no change (or a lost aircraft) rather than unbounded drift
+            c, k = tau0 + rate * (t - t0), min(max(0.0, t - t0 - 1.0), STALE_CAP_S) + 0.1
+        return _polyline(clock, c - k - step, c + k + step)
+
+    def _peer_nominal(self, aid, t):
+        """Planned positions a peer occupies during [t, t + 1] if it keeps its announced state."""
+        clock = self.peers[aid][0]
+        st = self.peer_state.get(aid)
+        if st is None or self._peer_on_plan(aid, t):
+            return _polyline(clock, t, t + 1.0)
+        tau0, rate, t0 = st
+        c, k = tau0 + rate * (t - t0), min(max(0.0, t - t0 - 1.0), STALE_CAP_S) + 0.1
+        return _polyline(clock, c + min(0.0, rate) - k, c + max(0.0, rate) + k)
+
+    def _polyline_point(self, aid, t):
+        clock = self.peers[aid][0]
+        return [clock.position(min(max(t, clock.start), clock.end))]
+
+    def _peer_blocked(self, aid, t, near):
+        """Whether an on-schedule peer close to me must stop this step for an off-schedule aircraft."""
+        key = (aid, t)
+        if key in self._blocked:
+            return self._blocked[key]
+        clock = self.peers[aid][0]
+        out = False
+        here = self.clock.position(min(max(t, self.clock.start), self.clock.end))
+        seg = _polyline(clock, t, t + 1.0)
+        if seg is not None and _d(seg[0], here) <= FORMATION_M:
+            need = self.sep - SEP_MARGIN_M + STEP_MARGIN_M
+            tgt = self.peers[aid][1]
+            for other, _ in near:
+                if other == aid or self._peer_on_plan(other, t):
+                    continue
+                band = self._peer_reach(other, t, 0.0)
+                if band is None:
+                    continue
+                otgt = self.peers[other][1]
+                centre = self.contacts[tgt].pos if (tgt is not None and tgt == otgt) else None
+                for a0, a1 in (list(zip(seg, seg[1:])) or [(seg[0], seg[0])]):
+                    for b0, b1 in (list(zip(band, band[1:])) or [(band[0], band[0])]):
+                        if centre is not None and all(_d(q, centre) <= self.exempt for q in (a0, a1, b0, b1)):
+                            continue
+                        if _seg_dist(a0, a1, b0, b1) < need:
+                            out = True
+                            break
+                    if out:
+                        break
+                if out:
+                    break
+        self._blocked[key] = out
+        return out
+
+    def _step_worst(self, t, tau, rate, near, nominal=False):
+        """Smallest distance between my move at `rate` this step and the peers' reachable positions."""
+        mine = _polyline(self.clock, min(tau, tau + rate), max(tau, tau + rate))
+        if mine is None or tau <= self.clock.start + 1e-9 and rate <= 0.0:
+            return math.inf            # on the ground, or landed
+        # one more step on schedule is covered by the validated plan, even when I mean to leave it
+        trusted = TRUST_PLAN and rate == 1.0 and abs(tau - t) <= ON_PLAN_S
+        worst = math.inf
+        hold_on_plan = rate == 0.0 and abs(tau - t) <= ON_PLAN_S
+        for aid, reach in near:
+            if self._peer_on_plan(aid, t) and (trusted or hold_on_plan) and FORMATION_M > 0.0:
+                blocked = self._peer_blocked(aid, t, near)
+                if hold_on_plan and blocked:
+                    continue           # held at the same route time as the peer: as planned
+                if trusted and blocked:
+                    reach = self._polyline_point(aid, t)   # it stops where it is now
+                elif trusted:
+                    continue
+            elif trusted and self._peer_on_plan(aid, t):
+                continue
+            if trusted and not nominal:
+                # on schedule has the right of way: an off-plan peer checks its own moves against mine,
+                # so only where it may be now counts
+                reach = self._peer_reach(aid, t, 0.0)
+                if reach is None:
+                    continue
+            tgt = self.peers[aid][1]
+            centre = self.contacts[tgt].pos if (tgt is not None and tgt == self.target) else None
+            if REVERSE_LOOK_S > 0.0 and rate < 0.0 and not nominal and self._peer_on_plan(aid, t):
+                # turning back must not leave me in the way of on-schedule traffic coming up behind
+                ahead = _polyline(self.peers[aid][0], t + 1.0, t + 1.0 + REVERSE_LOOK_S)
+                for b0, b1 in (list(zip(ahead, ahead[1:])) or [(ahead[0], ahead[0])]) if ahead else ():
+                    if centre is None or not all(_d(q, centre) <= self.exempt for q in (mine[0], b0, b1)):
+                        worst = min(worst, _seg_dist(mine[0], mine[0], b0, b1))
+            mine_segs = list(zip(mine, mine[1:])) or [(mine[0], mine[0])]
+            reach_segs = list(zip(reach, reach[1:])) or [(reach[0], reach[0])]
+            for a0, a1 in mine_segs:
+                for b0, b1 in reach_segs:
+                    if centre is not None and all(_d(q, centre) <= self.exempt for q in (a0, a1, b0, b1)):
+                        continue       # the usual exemption around a shared target
+                    worst = min(worst, _seg_dist(a0, a1, b0, b1))
+        return worst
+
+    def _safe_options(self, t, tau, options, may_engage):
+        """Options whose move this step keeps clear of every peer; else the one keeping most distance."""
+        self._blocked = {}
+        here = self.clock.position(tau)
+        near, self.near_d = [], math.inf
+        for aid in self.peers:
+            reach = self._peer_reach(aid, t)
+            if reach is None:
+                continue
+            d = min(_d(q, here) for q in reach)
+            self.near_d = min(self.near_d, d)
+            if d < NEAR_M:
+                near.append((aid, reach))
+        if not near:
+            return options
+        need = self.sep - SEP_MARGIN_M + STEP_MARGIN_M
+        cand = options + [r for r in (0.0, 1.0, -1.0) if r not in options and self._allowed(tau, r, may_engage)]
+        worst = {r: self._step_worst(t, tau, r, near) for r in cand}
+        safe = [r for r in options if worst[r] >= need]
+        if safe:
+            return safe
+        safe = [r for r in cand if worst[r] >= need]
+        if safe:
+            return safe[:1]
+        # nothing is clear whatever the peers do: each peer answers for its own move, so take the move
+        # that keeps most distance from where they go if they keep their announced states; prefer to
+        # stay put (predictable, announced) unless a move keeps clearly more distance
+        nominal = [(aid, self._peer_nominal(aid, t)) for aid, _ in near]
+        nominal = [(aid, reach) for aid, reach in nominal if reach is not None]
+        worst = {r: self._step_worst(t, tau, r, nominal, nominal=True) for r in cand}
+        best = max(cand, key=lambda r: worst[r])
+        return [best if worst[best] >= worst[0.0] + ESCAPE_GAIN_M else 0.0]
 
     def _obs_end_report(self, c, obs):
         """Whole second at or after the real end of my observation of `c` (it ended during the last step)."""
@@ -529,7 +714,10 @@ class Policy:
             records += [("O", self.contact_index[c], self.reported[c]) for c in live[:2]]
         changed = self.sent is None and rate != 1.0 or self.sent is not None and rate != self.sent[0]
         off = abs(tau - t) > 0.25 or rate != 1.0
-        due = self.sent is not None and off and t - self.last_sent >= (REPEAT_S if self.repeats < 1 else REFRESH_S)
+        gap = REPEAT_S if self.repeats < 1 else REFRESH_S
+        if SAFE_STEP and getattr(self, "near_d", math.inf) < HEARTBEAT_NEAR_M:
+            gap = 1.0                                   # peers nearby check their moves against my state
+        due = self.sent is not None and off and t - self.last_sent >= gap
         if changed:
             self.sent, self.repeats = (rate, t), 0
         elif due:
