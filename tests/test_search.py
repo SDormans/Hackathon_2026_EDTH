@@ -590,6 +590,100 @@ class ClimbTests(unittest.TestCase):
 
 
 
+class GroundStrikeTests(unittest.TestCase):
+    def plan_with(self, sc, effector_wps, contact, scout):
+        tasks = [{"cid": contact.id, "point": search_planner.obs_point(sc, scout, contact, 0.0, 30.0),
+                  "window": contact.window, "cpos": contact.pos}]
+        tour = scout_tour(sc, scout, tasks, 30.0, depart=0.0)
+        obs_end = next(w['t'] + w['dwell_s'] for w in tour if w.get('action') == 'observe')
+        return tour, obs_end
+
+    def test_ground_route_is_valid_and_cheaper_than_30_m(self):
+        from fleetkit.energy import route_energy_wh
+        from fleetkit.model import parse_plan
+        sc = scenario()
+        scout = next(a for a in sc.aircraft if a.type == 'scout')
+        eff = next(a for a in sc.aircraft if a.subtype == 'light')
+        target = next(c for c in sc.contacts if c.id == 'B')
+        tour, obs_end = self.plan_with(sc, None, target, scout)
+        # After the scout has landed (pads are 60 m apart, in line with the contact).
+        arrive = max(obs_end + 15.0, tour[-1]['t'] + 60.0)
+        ground, earliest = search_planner.effector_route(eff, target, arrive,
+                                                         search_planner.GROUND_Z, 0.0, sc)
+        self.assertEqual(len(ground), 2)
+        self.assertEqual([w['z'] for w in ground], [0.0, 0.0])
+        self.assertEqual(ground[-1]['action'], 'engage')
+        low, _ = search_planner.effector_route(eff, target, arrive, 30.0, 0.0, sc)
+        results = {}
+        for name, route in (('ground', ground), ('low', low)):
+            plan = {'seed': sc.seed, 'routes': [{'aircraft': scout.id, 'waypoints': tour},
+                                                {'aircraft': eff.id, 'waypoints': route}]}
+            result = evaluate(sc, plan)
+            self.assertTrue(result.valid, result.violations)
+            results[name] = result
+        self.assertGreater(results['ground'].score, results['low'].score)
+        energy = lambda r: route_energy_wh(parse_plan({'seed': sc.seed, 'routes': [
+            {'aircraft': eff.id, 'waypoints': r}]})[0][eff.id].waypoints, eff)
+        self.assertLess(energy(ground), energy(low) - eff.power.e_climb_wh_per_m * 29.0)
+        # Too early for the straight line at cruise speed.
+        self.assertIsNone(search_planner.effector_route(eff, target, earliest - 1.0,
+                                                        search_planner.GROUND_Z, 0.0, sc)[0])
+        # Ground routes are straight: other approach angles add nothing.
+        self.assertIsNone(search_planner.effector_route(eff, target, arrive,
+                                                        search_planner.GROUND_Z, 35.0, sc)[0])
+
+    def test_blocked_ground_line_falls_back_to_the_30_m_route(self):
+        data = json.loads(json.dumps({
+            'seed': 1, 'level': 'test', 'horizon_s': 900, 'aircraft': [], 'contacts': [],
+            'zones': [dict(id='Z', center=[700, 325], radius_m=60.0, top_m=40.0)]}))
+        base = scenario()
+        sc = replace(base, zones=Scenario.from_dict(data).zones)
+        eff = next(a for a in sc.aircraft if a.subtype == 'light')
+        target = next(c for c in sc.contacts if c.id == 'B')
+        self.assertIsNone(search_planner.ground_route(eff, target, 500.0, sc))
+        route, _ = search_planner.effector_route(eff, target, 500.0, search_planner.GROUND_Z,
+                                                 0.0, sc)
+        self.assertGreater(len(route), 2)
+        self.assertTrue(all(w['z'] >= 30.0 for w in route[1:-1]))
+        self.assertEqual(ClimbTests().legs_ok(sc, {eff.id: route}), [])
+
+    def test_layer_sets_follow_the_flag(self):
+        self.assertEqual(search_planner.effector_layer_sets()[0], (search_planner.GROUND_Z,))
+        search_planner.GROUND_STRIKES = False
+        try:
+            self.assertEqual(search_planner.effector_layer_sets(), search_planner.EFFECTOR_Z)
+        finally:
+            search_planner.GROUND_STRIKES = True
+
+    def test_search_exports_valid_plans_with_ground_strikes(self):
+        sc = scenario()
+        verified = Search(sc, seconds=3.0).run()
+        for state, result in verified:
+            self.assertTrue(evaluate(sc, state.plan(sc.seed)).valid)
+        best = verified[0][0]
+        effectors = [r for aid, r in best.routes.items()
+                     if next(a for a in sc.aircraft if a.id == aid).type == 'effector']
+        self.assertTrue(any(len(r) == 2 and r[-1]['z'] == 0.0 for r in effectors))
+
+
+class ScoutRankTests(unittest.TestCase):
+    def test_cheaper_scout_ranks_first_with_energy_ranking(self):
+        sc = scenario()
+        cheap = sc.aircraft[1]
+        sc.aircraft[1] = replace(cheap, power=replace(cheap.power, p0_w=50.0))
+        search = Search(sc, seconds=5)
+        contact = next(c for c in sc.contacts if c.id == 'A')
+        ranked = [a.id for a in search.ranked_scouts(search.root, contact, False)]
+        self.assertEqual(ranked[0], 'scout1')
+        search_planner.SCOUT_ENERGY_RANK = False
+        try:
+            ranked = [a.id for a in search.ranked_scouts(search.root, contact, False)]
+        finally:
+            search_planner.SCOUT_ENERGY_RANK = True
+        # By added distance only, the nearer pad wins.
+        self.assertEqual(ranked[0], 'scout0')
+
+
 class CacheTests(unittest.TestCase):
     def test_memoised_validation_matches_fresh_validation(self):
         sc = Scenario.from_dict(generate('L3', 2))
@@ -639,3 +733,227 @@ class CacheTests(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class TripTests(unittest.TestCase):
+    """Scout trip label search (LNS operator "trip")."""
+    @classmethod
+    def setUpClass(cls):
+        cls.sc = Scenario.from_dict(generate('L4', 9))
+        cls.search = Search(cls.sc, seconds=6.0, lns_share=0.0)
+        cls.best = cls.search.run()[0][0]
+        cls.search.checker.stop = time.monotonic() + 60.0
+
+    def scouts(self):
+        return [a for a in self.sc.aircraft if a.type == 'scout']
+
+    def test_trip_route_is_valid_within_battery_and_horizon(self):
+        s, checked = self.search, 0
+        for scout in self.scouts():
+            partial, _ = s.strip_scout(self.best, scout.id)
+            self.assertIsNotNone(partial)
+            others = {t['cid'] for sid, ts in self.best.tasks.items() if sid != scout.id for t in ts}
+            z = search_planner.SCOUT_LAYERS[0]
+            start = time.monotonic()
+            trips = s.scout_trips(partial, scout, partial.used, others | set(partial.served), z)
+            self.assertLess(time.monotonic() - start, 0.5)
+            if not trips or not trips[0][1]:
+                continue
+            value, order, wh, finishes = trips[0]
+            self.assertEqual(list(finishes), sorted(finishes))
+            tasks = [{'cid': c, 'point': search_planner.obs_point(self.sc, scout, s.contacts[c], 0.0, z),
+                      'window': s.contacts[c].window, 'cpos': s.contacts[c].pos} for c in order]
+            route = scout_tour(self.sc, scout, tasks, z)
+            self.assertIsNotNone(route, order)
+            self.assertLessEqual(route[-1]['t'], self.sc.horizon_s + 1e-6)
+            self.assertLessEqual(search_planner.raw_energy_wh(route, scout), scout.usable_wh + 1e-6)
+            alone = IncrementalValidator(self.sc, time.monotonic() + 60).extend(s.root, {scout.id: route})
+            self.assertIsNotNone(alone, order)
+            self.assertLessEqual(set(order) & {c.id for c in self.sc.contacts if c.cls == 'unknown'},
+                                 set(alone.served))
+            checked += 1
+        self.assertGreater(checked, 0)
+
+    def test_best_trip_is_no_worse_than_the_current_tour(self):
+        s = self.search
+        lam = self.sc.rules.lambda_e
+        for scout in self.scouts():
+            current = tuple(t['cid'] for t in self.best.tasks[scout.id])
+            partial, _ = s.strip_scout(self.best, scout.id)
+            others = {t['cid'] for sid, ts in self.best.tasks.items() if sid != scout.id for t in ts}
+            route = self.best.routes.get(scout.id)
+            z = max(w['z'] for w in route) if route else search_planner.SCOUT_LAYERS[0]
+            trips = s.scout_trips(partial, scout, partial.used, others | set(partial.served), z)
+            mine = [tr for tr in trips if set(tr[1]) == set(current)]
+            if current and mine:
+                self.assertGreaterEqual(trips[0][0], mine[0][0] - 1e-9)
+            # Value is net value minus scout energy: never above the sum of net values.
+            for value, order, wh, _ in trips:
+                self.assertLess(value, sum(s.matrix.priority(s.contacts[c]) if s.contacts[c].cls == 'unknown'
+                                           else s.contacts[c].points for c in order) + 1e-9)
+                self.assertGreater(wh, 0)
+
+    def test_trip_move_keeps_plans_valid(self):
+        s = self.search
+        rng = random.Random(3)
+        moved = 0
+        for _ in range(6):
+            got = s.trip_move(self.best, rng)
+            if got is None:
+                continue
+            partial, removed = got
+            moved += 1
+            result = evaluate(self.sc, partial.plan(self.sc.seed))
+            self.assertTrue(result.valid, [str(v) for v in result.violations][:3])
+            self.assertAlmostEqual(result.score, partial.score, places=6)
+        self.assertGreater(moved, 0)
+
+    def test_lns_with_trip_operator_exports_valid_plans(self):
+        sc = Scenario.from_dict(generate('L3', 4))
+        old = search_planner.TRIP_SHARE
+        search_planner.TRIP_SHARE = 0.6
+        try:
+            search = Search(sc, seconds=5.0, lns_share=0.6)
+            verified = search.run()
+        finally:
+            search_planner.TRIP_SHARE = old
+        self.assertGreater(search.lns['trip_tried'], 0)
+        self.assertIn('trip_improvements', search.report(verified)['lns'])
+        for state, result in verified:
+            self.assertTrue(evaluate(sc, state.plan(sc.seed)).valid)
+            self.assertAlmostEqual(result.score, state.score, places=6)
+
+
+class TripPlanTests(unittest.TestCase):
+    """All-scouts trip selection (set packing) used as a warm start."""
+    def test_pack_trips_matches_brute_force(self):
+        rng = random.Random(5)
+        for _ in range(30):
+            trips = [(rng.uniform(1, 20), f'S{rng.randrange(3)}',
+                      frozenset(rng.sample('ABCDEFG', rng.randint(1, 3))), None) for _ in range(9)]
+            value, chosen = search_planner.pack_trips(trips)
+            self.assertEqual(len({t[1] for t in chosen}), len(chosen))
+            seen = set()
+            for t in chosen:
+                self.assertFalse(seen & t[2])
+                seen |= t[2]
+            best = 0.0
+            for r in range(len(trips) + 1):
+                for combo in __import__('itertools').combinations(trips, r):
+                    scouts = [t[1] for t in combo]
+                    cids = [c for t in combo for c in t[2]]
+                    if len(set(scouts)) == len(scouts) and len(set(cids)) == len(cids):
+                        best = max(best, sum(t[0] for t in combo))
+            self.assertAlmostEqual(value, sum(t[0] for t in chosen))
+            # Greedy plus swaps is a heuristic: allow a small gap, never above optimal.
+            self.assertLessEqual(value, best + 1e-9)
+            self.assertGreaterEqual(value, 0.8 * best)
+
+    def test_cover_adds_a_trip_for_each_reachable_contact(self):
+        sc = Scenario.from_dict(generate('L4', 9))
+        search = Search(sc, seconds=10)
+        search.matrix = CandidateMatrix(sc)
+        scout = next(a for a in sc.aircraft if a.type == 'scout')
+        z = search_planner.SCOUT_LAYERS[0]
+        cands = search.trip_candidates(scout, frozenset(), set(), z)
+        plain = search_planner.trip_labels(sc, scout, cands, z, top=5)
+        covered = search_planner.trip_labels(sc, scout, cands, z, top=5, cover=True)
+        self.assertEqual(covered[:5], plain)
+        reached = {c for tr in covered for c in tr[1]}
+        self.assertGreater(len(reached), len({c for tr in plain for c in tr[1]}))
+        for c in reached:
+            self.assertTrue(any(c in tr[1] for tr in covered))
+
+    def test_trip_plan_warm_start_records_valid_plans(self):
+        sc = Scenario.from_dict(generate('L3', 4))
+        search = Search(sc, seconds=8.0, lns_share=0.3)
+        verified = search.run()
+        self.assertIn('realised', search.trip_stats)
+        self.assertTrue(any(isinstance(n['decision'], dict) and n['decision'].get('kind') == 'trip_plan'
+                            for n in search.trace))
+        self.assertIn('trip_plan', search.report(verified))
+        for state, result in verified:
+            self.assertTrue(evaluate(sc, state.plan(sc.seed)).valid)
+            self.assertAlmostEqual(result.score, state.score, places=6)
+
+    def test_trip_plan_respects_its_stop(self):
+        sc = Scenario.from_dict(generate('L4', 9))
+        search = Search(sc, seconds=20)
+        search.matrix = CandidateMatrix(sc)
+        start = time.monotonic()
+        try:
+            state = search.trip_plan(start + 0.3)
+        except search_planner.DeadlineReached:
+            state = None
+        self.assertLess(time.monotonic() - start, 1.0)
+        if state is not None:
+            self.assertTrue(evaluate(sc, state.plan(sc.seed)).valid)
+
+
+class GroupTests(unittest.TestCase):
+    """Joint re-plan of n scouts (LNS operator "group")."""
+    @classmethod
+    def setUpClass(cls):
+        cls.sc = Scenario.from_dict(generate('L4', 9))
+        cls.search = Search(cls.sc, seconds=6.0, lns_share=0.0)
+        cls.best = cls.search.run()[0][0]
+        cls.search.checker.stop = time.monotonic() + 60.0
+
+    def test_best_disjoint_matches_brute_force(self):
+        import itertools
+        rng = random.Random(5)
+        for case in range(300):
+            n = rng.choice((2, 3))
+            lists = []
+            for _ in range(n):
+                trips = {(round(rng.uniform(-2, 20), 3), rng.randrange(1, 64)) for _ in range(rng.randint(1, 7))}
+                lists.append(sorted(trips | {(0.0, 0)}, key=lambda t: -t[0]))
+            want = max(sum(t[0] for t in combo) for combo in itertools.product(*lists)
+                       if all(a[1] & b[1] == 0 for a, b in itertools.combinations(combo, 2)))
+            got = search_planner.best_disjoint(lists)
+            self.assertIsNotNone(got, case)
+            value, picks = got
+            self.assertAlmostEqual(value, want, places=6)
+            chosen = [lists[i][k] for i, k in enumerate(picks)]
+            self.assertAlmostEqual(sum(t[0] for t in chosen), value, places=6)
+            for a, b in itertools.combinations(chosen, 2):
+                self.assertEqual(a[1] & b[1], 0)
+            # A floor at the optimum means nothing beats it.
+            self.assertIsNone(search_planner.best_disjoint(lists, want))
+
+    def test_group_move_keeps_plans_valid(self):
+        s = self.search
+        old = search_planner.GROUP_SIZES
+        search_planner.GROUP_SIZES = (2, 3, 4)
+        try:
+            rng = random.Random(4)
+            for _ in range(8):
+                got = s.group_move(self.best, rng)
+                if got is None:
+                    continue
+                partial, removed = got
+                result = evaluate(self.sc, partial.plan(self.sc.seed))
+                self.assertTrue(result.valid, [str(v) for v in result.violations][:3])
+                self.assertAlmostEqual(result.score, partial.score, places=6)
+        finally:
+            search_planner.GROUP_SIZES = old
+        self.assertGreater(s.lns['group_realised'], 0)
+
+    def test_lns_with_group_operator_keeps_or_improves_valid_plans(self):
+        sc = Scenario.from_dict(generate('L4', 10))
+        old = search_planner.GROUP_SIZES, search_planner.GROUP_SHARE, search_planner.TRIP_SHARE
+        search_planner.GROUP_SIZES, search_planner.GROUP_SHARE, search_planner.TRIP_SHARE = (2, 3), 0.8, 0.0
+        try:
+            search = Search(sc, seconds=10.0, lns_share=0.5)
+            contacts, priorities = search.search_phase()
+            before = search.archive[0].score
+            search.improve_phase(contacts, priorities)
+            verified = search.finalize()
+        finally:
+            search_planner.GROUP_SIZES, search_planner.GROUP_SHARE, search_planner.TRIP_SHARE = old
+        self.assertGreater(search.lns['group_tried'], 0)
+        self.assertGreaterEqual(verified[0][1].score, before - 1e-6)
+        self.assertIn('group_improvements', search.report(verified)['lns'])
+        for state, result in verified:
+            self.assertTrue(evaluate(sc, state.plan(sc.seed)).valid)
+            self.assertAlmostEqual(result.score, state.score, places=6)

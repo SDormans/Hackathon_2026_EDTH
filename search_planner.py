@@ -6,6 +6,7 @@ The matrix ranks candidates; only official rule checks establish validity.
 from __future__ import annotations
 
 from dataclasses import dataclass, field, replace
+import heapq
 import itertools
 import math
 import random
@@ -32,7 +33,7 @@ class DeadlineReached(Exception):
     pass
 
 
-DESTROY_OPERATORS = ("random", "related", "worst", "tour")
+DESTROY_OPERATORS = ("random", "related", "worst", "tour", "trip", "group")
 
 
 # Scout candidate generation.
@@ -83,6 +84,24 @@ EFFECTOR_CRUISE = 0.995
 EFFECTOR_Z = ((30.0,),) + tuple(tuple(EFFECTOR_LAYERS[(i + r) % len(EFFECTOR_LAYERS)]
                                       for i in range(len(EFFECTOR_LAYERS)))
                                 for r in range(len(EFFECTOR_LAYERS)))
+# Ground-level strikes. R2 bounds the altitude of waypoints after the first and before the
+# last only, and R10 needs the engagement within R_eng (3D) of the contact on the ground,
+# so a two-waypoint effector route (home, engagement) may fly the straight line at z = 0:
+# no climb energy (e_climb x 30 m: 0.3-0.6 Wh per light, 0.9-1.5 Wh per heavy), no climb
+# time and no approach detour. Tried first (layer GROUND_Z, angle 0 only) for every team;
+# a member whose straight ground line enters a zone or protected area (R6) flies the 30 m
+# route instead. Off: the 30 m team first, as before.
+GROUND_STRIKES = True
+GROUND_Z = 0.0
+# Clearance (m) kept from zone and protected-area cylinders by a ground route: waypoints
+# are rounded to 1 mm.
+GROUND_CLEARANCE_M = 1.0
+
+
+def effector_layer_sets():
+    """Layer sets tried for a strike team, in order."""
+    return (((GROUND_Z,),) + EFFECTOR_Z) if GROUND_STRIKES else EFFECTOR_Z
+
 
 _cyl = {}
 
@@ -119,6 +138,13 @@ def effector_route(eff, contact, arrive, z, angle, scenario):
 
     The flight path depends only on (effector, contact, layer, angle); it is built once
     and only the times are placed for each arrival."""
+    if z == GROUND_Z:
+        if angle != 0.0:
+            return None, arrive
+        route = ground_route(eff, contact, arrive, scenario)
+        if route is not None:
+            return route
+        z = 30.0
     if not DIAGONAL_CLIMB:
         return _effector_route(eff, contact, arrive, z, angle, scenario)
     key = (id(scenario), eff.id, contact.id, z, angle, EFFECTOR_CRUISE)
@@ -144,6 +170,29 @@ def effector_route(eff, contact, arrive, z, angle, scenario):
     wps.append(baseline._wp(t_a, a_pt))
     wps.append(baseline._wp(arrive, e_pt, action="engage", target=contact.id))
     return wps, earliest
+
+
+_ground_clear = {}
+
+
+def ground_route(eff, contact, arrive, scenario):
+    """(route, earliest arrival) for the two-waypoint route home -> engagement at the
+    contact, flown at ground level; None when the straight line is not clear (R6)."""
+    key = (id(scenario), eff.id, contact.id)
+    hit = _ground_clear.get(key)
+    if hit is None or hit[0] is not scenario:
+        home, end = eff.home, contact.pos
+        cylinders = baseline._cylinders(scenario)
+        clear = not any(segment_enters_cylinder(home, end, c, r + GROUND_CLEARANCE_M, top)
+                        for c, r, top in cylinders)
+        hit = _ground_clear[key] = (scenario, clear)
+    if not hit[1]:
+        return None
+    earliest = hdist(eff.home, contact.pos) / (EFFECTOR_CRUISE * eff.v_h_mps)
+    if arrive < earliest:
+        return None, earliest
+    return [baseline._wp(arrive - earliest, eff.home),
+            baseline._wp(arrive, contact.pos, action="engage", target=contact.id)], earliest
 
 
 def _effector_shape(eff, contact, z, angle, scenario):
@@ -427,6 +476,19 @@ def takeoff_shift(scenario, aircraft, routes, scout, depart, limit=40.0, step=2.
     return 0.0
 
 
+# Rank scouts by added cruise energy (added distance x Wh per metre at the tour speed)
+# instead of added distance. Scout efficiency varies by about +-30% within a scenario
+# (L2-202: 7.9 vs 10.4-10.7 J/m), and ranking by distance alone often leaves the
+# cheapest scout idle; hand-built plans with the efficient scouts score +10 on L2-202.
+SCOUT_ENERGY_RANK = True
+
+
+def scout_wh_per_m(scout):
+    """Cruise energy per metre (Wh) at the speed scout tours fly."""
+    v = eco_speed(scout) if SCOUT_SPEED_MODE == "eco" else fast_speed(scout)
+    return (scout.power.p0_w + scout.power.k_v * v * v) / v / 3600.0
+
+
 # Scout options are ranked and filtered by a straight-leg replay of the whole tour
 # (tour_estimate): every window, strike confirmations, landing before the horizon and
 # battery. Off: the distance ranking and scout_reachable bound only.
@@ -499,6 +561,338 @@ def strike_deadlines(scenario, aircraft, routes):
                 cid = w["target"]
                 out[cid] = min(out.get(cid, math.inf), w["t"] - scenario.rules.confirm_margin_s)
     return out
+
+
+# Scout trip label search (LNS operator "trip"): one scout's whole sortie rebuilt as the
+# best-value chain of contacts it can observe in their windows and still get home within
+# battery and horizon. Off: the LNS never picks the "trip" operator.
+TRIP_SEARCH = True
+TRIP_SHARE = 0.2        # share of LNS steps using "trip" (without --adaptive)
+TRIP_LABELS = 6         # labels kept per contact (best by value)
+TRIP_BATTERY = 0.995    # usable battery share the straight-leg estimate may use
+TRIP_STRIKE_SLACK = 3.0  # seconds kept after confirm_margin + 2 s before a strike window end
+
+
+_legs = {}
+
+
+def leg_length(scenario, a, b, z, exact=True):
+    """Horizontal length of the scout leg a-b at layer z as the tour builder flies it
+    (straight, or the kit's detour around zones); inf when no detour exists.
+    exact=False: the straight length (a lower bound) without computing detours."""
+    if not exact:
+        return hdist(a, b)
+    key = (id(scenario), a[0], a[1], b[0], b[1], z)
+    hit = _legs.get(key)
+    if hit is None or hit[0] is not scenario:
+        p, q = (a[0], a[1], z), (b[0], b[1], z)
+        if clear_leg(scenario, p, q):
+            d = hdist(p, q)
+        else:
+            path = _cached_detour([p, q], scenario)
+            d = math.inf if path is None else baseline._length(path)
+        if len(_legs) > 200000:
+            _legs.clear()
+        hit = _legs[key] = (scenario, d)
+    return hit[1]
+
+
+def trip_labels(scenario, scout, cands, z, keep=TRIP_LABELS, top=30, orders=(), cover=False,
+                skip=0, rows=None, exact=True):
+    """Best single-sortie trips for `scout` by resource-constrained label setting.
+
+    cands: [(cid, point, (lo, hi), net value, latest finish)]. A label is a chain of visits
+    ending at one candidate: (finish time, Wh so far, net value, visited mask). Legs are
+    straight, at the scout's cruise speed, with tour_estimate's departure rule, waiting and
+    energy model (lower bounds of scout_tour). Labels are dropped when dominated at the same
+    contact (earlier or equal finish, less Wh, more value, subset of visits) or when the
+    contact already keeps `keep` better ones. `orders`: extra visit orders (contact ids) to
+    evaluate the same way, e.g. the current tour.
+
+    Returns up to `top` trips [(value, order, Wh, finishes)] with distinct contact sets,
+    best first; value = sum of net values - lambda_e * scout energy (home to home).
+    cover: also the best trip found that includes each candidate (beyond `top`), so
+    trip selection across scouts can trade contacts. skip: bit mask of candidates to
+    leave out. rows: a dict reused across calls with the same cands (leg lengths).
+    exact=False: straight legs, no detours (faster; realisation checks the real tour).
+    """
+    rules_, p = scenario.rules, scout.power
+    speed = eco_speed(scout) if SCOUT_SPEED_MODE == "eco" else fast_speed(scout)
+    home, dwell, lam = scout.home[:2], rules_.obs_dwell_s, rules_.lambda_e
+    cap, horizon = TRIP_BATTERY * scout.usable_wh, scenario.horizon_s
+    cruise_w = p.p0_w + p.k_v * speed * speed
+    descent = 0.0 if DIAGONAL_CLIMB else z / (SPEED_FACTOR * scout.v_down_mps) + 0.5
+    lead = 0.0 if DIAGONAL_CLIMB else z / scout.v_up_mps
+    climb = 0.0 if DIAGONAL_CLIMB else z / (SPEED_FACTOR * scout.v_up_mps) + 0.5
+    start_wh = p.e_climb_wh_per_m * z + p.p0_w * climb / 3600.0
+    n = len(cands)
+    if rows is not None and "back" in rows:
+        back_d = rows["back"]
+    else:
+        back_d = [leg_length(scenario, c[1], home, z, exact) for c in cands]
+    back_t = [d / speed + descent for d in back_d]
+    back_wh = [(cruise_w * d / speed + p.p0_w * descent) / 3600.0 for d in back_d]
+    dwell_wh = p.p0_w * dwell / 3600.0
+    index = {c[0]: j for j, c in enumerate(cands)}
+
+    def leg(t, wh, d, j):
+        _, _, (lo, _), _, latest = cands[j]
+        arrive = max(t + d / speed, lo)
+        finish = arrive + dwell
+        if finish > latest + EPS or finish + back_t[j] > horizon + EPS:
+            return None
+        dt = arrive - t
+        if dt > 0:
+            v = d / dt
+            wh += (p.p0_w + p.k_v * v * v) * dt / 3600.0
+        wh += dwell_wh
+        if wh + back_wh[j] > cap:
+            return None
+        return finish, wh
+
+    def first(j):
+        d = rows["out"][j]
+        if d == math.inf:
+            return None
+        lo = cands[j][2][0]
+        # _depart times the straight line; a detour only makes the arrival later.
+        depart = max(0.0, lo - (hdist(home, cands[j][1]) / speed + lead + 3.0)) + climb
+        return leg(depart, start_wh, d, j)
+
+    rows = {} if rows is None else rows
+
+    def dist(j):
+        row = rows.get(j)
+        if row is None:
+            row = rows[j] = [leg_length(scenario, cands[j][1], b[1], z, exact) for b in cands]
+        return row
+    labels = []          # [finish, wh, net, mask, node, pred, alive]
+    buckets = [[] for _ in range(n)]
+    heap = []
+
+    def push(finish, wh, net, mask, j, pred):
+        value = net - lam * wh
+        bucket = buckets[j]
+        for o in bucket:
+            if (o[0] <= finish + EPS and o[1] <= wh + 1e-9 and o[2] - lam * o[1] >= value - 1e-9
+                    and o[3] & ~mask == 0):
+                return
+        kept = []
+        for o in bucket:
+            if (finish <= o[0] + EPS and wh <= o[1] + 1e-9 and value >= o[2] - lam * o[1] - 1e-9
+                    and mask & ~o[3] == 0):
+                o[6] = False
+            else:
+                kept.append(o)
+        if len(kept) >= keep:
+            worst = min(kept, key=lambda o: o[2] - lam * o[1])
+            if worst[2] - lam * worst[1] >= value:
+                buckets[j] = kept
+                return
+            worst[6] = False
+            kept.remove(worst)
+        label = [finish, wh, net, mask, j, pred, True]
+        kept.append(label)
+        buckets[j] = kept
+        labels.append(label)
+        heapq.heappush(heap, (finish, len(labels) - 1))
+
+    if "back" not in rows:
+        rows["back"] = [leg_length(scenario, c[1], home, z, exact) for c in cands]
+        rows["out"] = [leg_length(scenario, home, c[1], z, exact) for c in cands]
+    for j in range(n):
+        if skip >> j & 1:
+            continue
+        got = first(j)
+        if got is not None:
+            push(got[0], got[1], cands[j][3], 1 << j, j, None)
+    while heap:
+        _, i = heapq.heappop(heap)
+        label = labels[i]
+        if not label[6]:
+            continue
+        t, wh, net, mask, j = label[:5]
+        row = dist(j)
+        for k in range(n):
+            if (mask | skip) >> k & 1 or row[k] == math.inf:
+                continue
+            got = leg(t, wh, row[k], k)
+            if got is not None:
+                push(got[0], got[1], net + cands[k][3], mask | 1 << k, k, label)
+
+    def chain(label):
+        out = []
+        while label is not None:
+            out.append(label)
+            label = label[5]
+        return out[::-1]
+
+    trips = {}
+    covering = {}       # candidate index -> (value, mask) of the best trip including it
+    for label in labels:
+        value = label[2] - lam * (label[1] + back_wh[label[4]])
+        best = trips.get(label[3])
+        if best is None or value > best[0]:
+            path = chain(label)
+            trips[label[3]] = (value, tuple(cands[o[4]][0] for o in path), label[1] + back_wh[label[4]],
+                               tuple(o[0] for o in path))
+        if cover:
+            mask, j = label[3], 0
+            while mask:
+                if mask & 1 and (j not in covering or value > covering[j][0]):
+                    covering[j] = (value, label[3])
+                mask >>= 1
+                j += 1
+    for order in orders:
+        if not order or any(cid not in index for cid in order):
+            continue
+        js = [index[cid] for cid in order]
+        got, net, finishes = first(js[0]), cands[js[0]][3], []
+        for a, b in zip([None] + js, js):
+            if a is not None and got is not None:
+                got = None if dist(a)[b] == math.inf else leg(got[0], got[1], dist(a)[b], b)
+                net += cands[b][3]
+            if got is None:
+                break
+            finishes.append(got[0])
+        if got is None:
+            continue
+        mask = sum(1 << j for j in js)
+        value = net - lam * (got[1] + back_wh[js[-1]])
+        if mask not in trips or value > trips[mask][0]:
+            trips[mask] = (value, tuple(order), got[1] + back_wh[js[-1]], tuple(finishes))
+    out = sorted(trips.values(), key=lambda tr: (-tr[0], tr[1]))[:top]
+    if cover:
+        have = {frozenset(tr[1]) for tr in out}
+        for _, mask in sorted(covering.values(), key=lambda vm: -vm[0]):
+            tr = trips[mask]
+            if frozenset(tr[1]) not in have:
+                have.add(frozenset(tr[1]))
+                out.append(tr)
+    return out
+
+
+# Trip plan warm start: top trips per scout from the label search, at most one per scout
+# and no contact twice (weighted set packing), realised before the beam passes.
+TRIP_PLAN = True
+TRIP_PLAN_TRIPS = 40     # candidate trips per scout and layer
+TRIP_PLAN_SHARE = 0.2    # at most this share of the beam phase (start to beam end)
+TRIP_PLAN_ROUNDS = 2     # re-plan each scout around the others' chosen trips, re-pack
+TRIP_PLAN_LABELS = 4     # labels kept per contact while generating plan trips
+TRIP_PLAN_EXACT = False  # plan trips use straight legs (detours are ~95% of the label time)
+TRIP_PLAN_DROPS = 2      # extra searches per scout without one of its best trip's contacts
+
+
+def pack_trips(trips, stop=None):
+    """Weighted set packing: at most one trip per scout, no contact in two trips, maximal
+    total value. trips = [(value, scout id, contact ids, payload)] with value > 0.
+
+    Greedy by value and by value per contact, then swaps until none helps: a trip outside
+    the packing replaces every chosen trip it conflicts with, the scouts left without a
+    trip are refilled greedily from their own trips, and the swap is kept when the total
+    grows. Returns (value, chosen trips).
+    """
+    trips = [tr for tr in trips if tr[0] > 0]
+    trips.sort(key=lambda tr: (-tr[0], tr[1], tuple(sorted(tr[2]))))
+    by_scout = {}
+    for tr in trips:
+        by_scout.setdefault(tr[1], []).append(tr)
+
+    def fill(chosen):
+        scouts = {tr[1] for tr in chosen}
+        taken = set()
+        for tr in chosen:
+            taken |= tr[2]
+        free = sorted((tr for sid, own in by_scout.items() if sid not in scouts for tr in own),
+                      key=lambda tr: -tr[0])
+        for tr in free:
+            if tr[1] not in scouts and not (taken & tr[2]):
+                chosen.append(tr)
+                scouts.add(tr[1])
+                taken |= tr[2]
+        return chosen
+
+    def total(chosen):
+        return sum(tr[0] for tr in chosen)
+
+    best = []
+    for key in (None, lambda tr: -tr[0] / max(1, len(tr[2]))):
+        order = trips if key is None else sorted(trips, key=key)
+        chosen, scouts, taken = [], set(), set()
+        for tr in order:
+            if tr[1] not in scouts and not (taken & tr[2]):
+                chosen.append(tr)
+                scouts.add(tr[1])
+                taken |= tr[2]
+        improved = True
+        while improved:
+            improved = False
+            current = total(chosen)
+            for tr in trips:
+                if stop is not None and time.monotonic() >= stop:
+                    break
+                if tr in chosen:
+                    continue
+                keep = [c for c in chosen if c[1] != tr[1] and not (c[2] & tr[2])]
+                if total(keep) + tr[0] + sum(by_scout[c[1]][0][0] for c in chosen
+                                             if c not in keep) <= current + 1e-9:
+                    continue  # even each freed scout's best trip could not pay for it
+                trial = fill(keep + [tr])
+                value = total(trial)
+                if value > current + 1e-9:
+                    chosen, current, improved = trial, value, True
+        if total(chosen) > total(best):
+            best = chosen
+    return total(best), best
+
+
+# Joint re-plan of n scouts (LNS operator "group"): pool the scouts' contacts and the
+# unserved positive-net contacts near them, generate each scout's top trips over that pool
+# with the label search, choose the best combination of disjoint trips and realise it when
+# its estimated value beats the scouts' current trips. Empty: the operator is off.
+GROUP_SIZES = (2, 3, 4)  # random n per move; () turns the operator off
+GROUP_SHARE = 0.2        # share of LNS steps using "group" (without --adaptive)
+GROUP_TRIPS = 40         # trips kept per scout (plus the cover trips)
+GROUP_RADIUS_M = 2000.0  # unserved contacts this close to a chosen scout's tour join the pool
+GROUP_POOL = 40          # at most this many pool contacts
+GROUP_MOVE_S = 0.8       # realisation time cap per move
+GROUP_NODES = 200000     # search nodes cap in best_disjoint
+
+
+def best_disjoint(lists, floor=-math.inf, nodes=GROUP_NODES):
+    """Best combination of one trip per list with pairwise disjoint contact masks.
+
+    lists: per scout [(value, mask)] sorted by value, best first (include (0, 0) to allow
+    an empty trip). Depth-first over scouts in order of their best trip, pruned when the
+    partial value plus every remaining scout's best trip cannot beat the best so far
+    (initially `floor`). Returns (value, [index per list]) or None if nothing beats floor.
+    """
+    n = len(lists)
+    if n == 0 or any(not lst for lst in lists):
+        return None
+    order = sorted(range(n), key=lambda i: -lists[i][0][0])
+    rest = [0.0] * (n + 1)
+    for pos in range(n - 1, -1, -1):
+        rest[pos] = rest[pos + 1] + max(0.0, lists[order[pos]][0][0])
+    best = [floor, None]
+    picks = [0] * n
+    count = [0]
+
+    def go(pos, value, mask):
+        if pos == n:
+            if value > best[0] + 1e-9:
+                best[0], best[1] = value, list(picks)
+            return
+        for k, (v, m) in enumerate(lists[order[pos]]):
+            count[0] += 1
+            if value + v + rest[pos + 1] <= best[0] + 1e-9 or count[0] > nodes:
+                return
+            if m & mask == 0:
+                picks[order[pos]] = k
+                go(pos + 1, value + v, mask | m)
+
+    go(0, 0.0, 0)
+    return None if best[1] is None else (best[0], best[1])
 
 
 def insertion_positions(home, tasks, pos, limit):
@@ -735,7 +1129,7 @@ class IncrementalValidator:
             return {k: v for k, v in d.items() if k not in removed}
         return replace(parent, routes=keep(parent.routes), parsed=keep(parent.parsed),
                        separation=keep(parent.separation), energies=keep(parent.energies),
-                       infos=keep(parent.infos))
+                       infos=keep(parent.infos), keys=keep(parent.keys))
 
     def extend(self, parent, extra):
         self.check_time()
@@ -881,7 +1275,14 @@ class Search:
         self.checker = IncrementalValidator(scenario, self.stop)
         self.aircraft = scenario.aircraft_by_id()
         self.contacts = scenario.contact_by_id()
-        self.lns = {"iterations": 0, "accepted": 0, "improvements": 0, "gain": 0.0}
+        self.lns = {"iterations": 0, "accepted": 0, "improvements": 0, "gain": 0.0,
+                    "trip_tried": 0, "trip_accepted": 0, "trip_improvements": 0,
+                    "trip_gain": 0.0, "trip_label_s": 0.0,
+                    "group_tried": 0, "group_realised": 0, "group_accepted": 0,
+                    "group_improvements": 0, "group_gain": 0.0, "group_label_s": 0.0,
+                    "group_sizes": {}}
+        self._trip_cache = {}
+        self.trip_stats = {}
         self.lns_share = lns_share
         self.interleave, self.adaptive, self.restarts = interleave, adaptive, restarts
         # Later passes keep a wider beam: more outranked branches survive to the end.
@@ -1010,6 +1411,8 @@ class Search:
                          - hdist(points[i], points[i + 1]))
                 best = added if best is None else min(best, added)
             if best is not None:
+                if SCOUT_ENERGY_RANK:
+                    best *= scout_wh_per_m(scout)
                 ranked.append((best, scout.id, scout))
         ranked.sort(key=lambda r: r[:2])
         out = [r[2] for r in ranked]
@@ -1162,7 +1565,8 @@ class Search:
             found = False
             spacing = min(5.0, self.sc.rules.sync_window_s / max(1, len(team)-1))
             delays = STRIKE_DELAYS if PAD_TAKEOFFS else (0.0, 8.0, 20.0, 45.0, 90.0)
-            for delay, angle, layers in itertools.product(delays, (0.0, 35.0, -35.0), EFFECTOR_Z):
+            for delay, angle, layers in itertools.product(delays, (0.0, 35.0, -35.0),
+                                                             effector_layer_sets()):
                 self.checker.check_time(stop)
                 arrive = base + delay
                 if arrive + spacing*(len(team)-1) > contact.window[1] + EPS:
@@ -1285,6 +1689,12 @@ class Search:
         priorities = {c.id: self.matrix.priority(c) for c in contacts}
         rng = random.Random(self.sc.seed)
         self.checker.stop = min(self.beam_stop, self.stop)
+        if TRIP_PLAN and contacts:
+            share = TRIP_PLAN_SHARE * max(0.0, self.beam_stop - self.start)
+            try:
+                self.trip_plan(min(self.checker.stop, time.monotonic() + share))
+            except DeadlineReached:
+                pass
         try:
             self.search(contacts, priorities, rng)
         except DeadlineReached:
@@ -1359,6 +1769,333 @@ class Search:
                 return candidate
         return None
 
+    # --- Scout trip label search -------------------------------------------------------
+
+    def trip_candidates(self, scout, used, exclude, z, deadlines=None):
+        """Label-search candidates for one scout: contacts with a net value above zero
+        (unknown: points; hostile: points minus its cheapest free team), their observation
+        point at layer z, window and latest observation finish (hostiles: early enough to
+        confirm and strike, and before any existing strike's deadline)."""
+        rules_ = self.sc.rules
+        deadlines = deadlines or {}
+        out = []
+        for c in self.sc.contacts:
+            if (c.cls not in (HOSTILE, UNKNOWN) or c.window is None or c.id in exclude
+                    or c.id in self.matrix.banned):
+                continue
+            lo, hi = c.window
+            latest = hi
+            if c.cls == HOSTILE:
+                groups = self.matrix.groups(c, used, 1)
+                if not groups:
+                    continue
+                team = groups[0]
+                net = c.points - sum(self.matrix.costs[a.id, c.id] for a in team)
+                spacing = min(5.0, rules_.sync_window_s / max(1, len(team) - 1)) * (len(team) - 1)
+                ready = max(lo, max(self.effector_earliest(a, c) for a in team))
+                if ready + spacing > hi + EPS:
+                    continue
+                latest = hi - spacing - rules_.confirm_margin_s - 2.0 - TRIP_STRIKE_SLACK
+            else:
+                net = c.points
+            latest = min(latest, deadlines.get(c.id, math.inf))
+            if net <= 0 or latest < lo + rules_.obs_dwell_s:
+                continue
+            out.append((c.id, obs_point(self.sc, scout, c, 0.0, z), (lo, hi), net, latest))
+        return out
+
+    def effector_earliest(self, eff, contact):
+        key = ("eff_earliest", eff.id, contact.id)
+        hit = self._trip_cache.get(key)
+        if hit is None:
+            route, earliest = effector_route(eff, contact, 0.0, EFFECTOR_Z[0][0], 0.0, self.sc)
+            hit = self._trip_cache[key] = 0.0 if route is not None else earliest
+        return hit
+
+    def scout_trips(self, state, scout, used, exclude, z, top=30):
+        """trip_labels for one scout against `state`, with its current tour as an extra
+        order so the result is never worse than what the scout already flies (by the same
+        estimate)."""
+        cands = self.trip_candidates(scout, used, exclude, z)
+        current = tuple(t["cid"] for t in state.tasks.get(scout.id, ()))
+        return trip_labels(self.sc, scout, cands, z, top=top, orders=(current,))
+
+    def trip_scout(self, state, rng):
+        """A scout for the trip move, favouring high battery use and unserved positive-net
+        contacts near its tour or base."""
+        unserved = [c for c in self.sc.contacts if c.cls in (HOSTILE, UNKNOWN)
+                    and c.window is not None and c.id not in state.served
+                    and c.id not in self.matrix.banned and self.matrix.priority(c) > 0]
+        scouts, weights = [], []
+        for sid in sorted(state.tasks):
+            scout = self.aircraft[sid]
+            frac = state.energies.get(sid, 0.0) / max(1e-9, scout.usable_wh)
+            points = [scout.home[:2]] + [t["point"] for t in state.tasks[sid]]
+            near = sum(1 for c in unserved if min(hdist(q, c.pos) for q in points) < 1500.0)
+            scouts.append(scout)
+            weights.append(0.3 + frac + 0.2 * min(5, near))
+        return rng.choices(scouts, weights=weights)[0] if scouts else None
+
+    def strip_scout(self, state, sid):
+        """State without scout sid's tour and the strikes its observations confirm."""
+        return self.strip_scouts(state, (sid,))
+
+    def strip_scouts(self, state, sids):
+        """State without the tours of scouts `sids` and the strikes their observations
+        confirm. Returns (state or None, removed contact ids)."""
+        cids = {t["cid"] for sid in sids for t in state.tasks.get(sid, ())}
+        team = {aid for aid, route in state.parsed.items()
+                if self.aircraft[aid].type != SCOUT
+                and any(w.action == "engage" and w.target in cids for w in route.waypoints)}
+        partial = self.checker.extend(self.checker.without(state, team | set(sids)), {})
+        if partial is None:
+            return None, cids
+        partial.tasks = {**state.tasks, **{sid: [] for sid in sids}}
+        return partial, cids
+
+    def realise_trip(self, state, scout, order, z, stop):
+        """Append the trip's visits one at a time (see realise_visits). Returns (state,
+        realised contact ids)."""
+        return self.realise_visits(state, [(scout, cid, z) for cid in order], stop)
+
+    def realise_visits(self, state, visits, stop, on_visit=None):
+        """Append visits [(scout, contact id, preferred layer)] in order through _serve
+        (strikes included), retrying layers, observation angles and takeoff shifts; visits
+        that cannot be realised are skipped. A scout keeps the layer its tour already flies.
+        on_visit(previous, new, scout, cid) is called after each realised visit.
+        Returns (state, realised contact ids); stops quietly at `stop`."""
+        done = []
+        try:
+            for scout, cid, z in visits:
+                self.checker.check_time(stop)
+                child = self.realise_visit(state, scout, cid, z, stop)
+                if child is not None:
+                    if on_visit is not None:
+                        child = on_visit(state, child, scout, cid)
+                    state = child
+                    done.append(cid)
+        except DeadlineReached:
+            self.checker.check_time()
+        return state, done
+
+    def realise_visit(self, state, scout, cid, z, stop):
+        """Best child appending contact cid to the scout's tour, or None."""
+        contact = self.contacts[cid]
+        if cid in state.served:
+            return None
+        groups = self.matrix.groups(contact, state.used) if contact.cls == HOSTILE else [()]
+        if not groups:
+            return None
+        route = state.routes.get(scout.id)
+        layer = max(w["z"] for w in route) if route else z
+        tasks = list(state.tasks.get(scout.id, ()))
+        layers = [layer] + [l for l in SCOUT_LAYERS if l != layer]
+        speed = eco_speed(scout) if SCOUT_SPEED_MODE != "fast" else fast_speed(scout)
+
+        def options():
+            for zz, angle, sh in itertools.product(layers, (0.0, 60.0, -60.0), (0.0, 7.0)):
+                task = {"cid": cid, "point": obs_point(self.sc, scout, contact, angle, zz),
+                        "window": contact.window, "cpos": contact.pos}
+                tt = tasks + [task]
+                if PAD_TAKEOFFS:
+                    sh += takeoff_shift(self.sc, self.aircraft, state.routes, scout,
+                                        _depart(scout, tt, zz, speed, 0.0))
+                yield scout, tt, scout_tour(self.sc, scout, tt, zz, sh)
+
+        # The first visits of a trip may cost more scout energy than they earn; the trip
+        # is judged as a whole by the caller.
+        base = replace(state, score=-math.inf)
+        progress = {"stage": -1, "outcome": "no_options"}
+        best = None
+        for child, _ in self._serve(base, contact, options(), groups, stop, 2,
+                                    self.stats(cid), progress, {"count": 0, "seen": set()}):
+            if best is None or child.score > best.score:
+                best = child
+        return best
+
+    def trip_plan(self, stop):
+        """Warm start from a packing of label-search trips of all scouts.
+
+        Candidate trips per scout and layer: the best ones, the best one including each
+        contact (cover) and the best one without each contact of its best trip; then
+        TRIP_PLAN_ROUNDS rounds of re-planning every scout without the contacts the other
+        chosen trips hold, re-packing after each. Every realised visit is recorded; the
+        result is then greedily repaired."""
+        start = time.monotonic()
+        unique = {}
+        scouts = [a for a in self.sc.aircraft if a.type == SCOUT]
+        layers = (SCOUT_LAYERS[0], min(SCOUT_LAYERS))
+        cands = {(a.id, z): self.trip_candidates(a, frozenset(), set(), z)
+                 for a in scouts for z in layers}
+
+        rows = {key: {} for key in cands}
+
+        def add(scout, z, exclude=(), top=TRIP_PLAN_TRIPS, cover=True):
+            self.checker.check_time(stop)
+            pool = cands[scout.id, z]
+            skip = sum(1 << j for j, c in enumerate(pool) if c[0] in exclude)
+            found = trip_labels(self.sc, scout, pool, z, keep=TRIP_PLAN_LABELS, top=top,
+                                cover=cover, skip=skip, rows=rows[scout.id, z],
+                                exact=TRIP_PLAN_EXACT)
+            for value, order, wh, finishes in found:
+                key = (scout.id, frozenset(order))
+                if key not in unique or value > unique[key][0]:
+                    unique[key] = (value, scout.id, frozenset(order), (z, order, finishes))
+            return found
+
+        for scout in scouts:
+            for z in layers:
+                found = add(scout, z)
+                if found:
+                    # The best trip without each of its most valuable contacts.
+                    net = {c[0]: c[3] for c in cands[scout.id, z]}
+                    for cid in sorted(found[0][1], key=lambda c: -net[c])[:TRIP_PLAN_DROPS]:
+                        add(scout, z, {cid}, top=3, cover=False)
+        pack_stop = lambda: min(stop, time.monotonic() + 0.3)
+        value, chosen = pack_trips(list(unique.values()), pack_stop())
+        rounds = 0
+        for _ in range(TRIP_PLAN_ROUNDS):
+            for scout in scouts:
+                held = {cid for tr in chosen if tr[1] != scout.id for cid in tr[2]}
+                for z in layers:
+                    add(scout, z, held, top=10)
+            value, chosen = pack_trips(list(unique.values()), pack_stop())
+            rounds += 1
+        self.trip_stats.update(candidates=len(unique), chosen=len(chosen), rounds=rounds,
+                               estimate=round(value, 3),
+                               label_s=round(time.monotonic() - start, 4))
+        visits = sorted(((f, self.aircraft[sid], cid, z)
+                         for _, sid, _, (z, order, finishes) in chosen
+                         for cid, f in zip(order, finishes)), key=lambda v: (v[0], v[2]))
+        depth = [0]
+
+        def on_visit(previous, child, scout, cid):
+            depth[0] += 1
+            return self.record(child, previous, {"kind": "trip_plan", "contact": cid,
+                                                 "scout": scout.id}, depth[0])
+
+        state, done = self.realise_visits(self.root, [(a, cid, z) for _, a, cid, z in visits],
+                                          stop, on_visit)
+        self.trip_stats.update(visits=len(visits), realised=len(done),
+                               realised_score=round(state.score, 3))
+        saved, self.checker.stop = self.checker.stop, min(self.checker.stop, stop)
+        try:
+            state = self.repair(state, depth[0])
+        except DeadlineReached:
+            pass
+        finally:
+            self.checker.stop = saved
+        self.trip_stats.update(score=round(state.score, 3),
+                               seconds=round(time.monotonic() - start, 3))
+        return state
+
+    def trip_move(self, current, rng):
+        """Destroy and rebuild one scout's whole tour from its best label-search trip.
+        Returns (partial state, contact ids removed) or None when nothing changes."""
+        scout = self.trip_scout(current, rng)
+        if scout is None:
+            return None
+        sid = scout.id
+        partial, removed = self.strip_scout(current, sid)
+        if partial is None:
+            return None
+        others = {t["cid"] for s, tasks in current.tasks.items() if s != sid for t in tasks}
+        route = current.routes.get(sid)
+        z = max(w["z"] for w in route) if route else SCOUT_LAYERS[0]
+        start = time.monotonic()
+        trips = self.scout_trips(partial, scout, partial.used, others | set(partial.served), z)
+        self.lns["trip_label_s"] += time.monotonic() - start
+        trips = [tr for tr in trips if set(tr[1]) != removed]
+        if not trips:
+            return None
+        pick = 0 if rng.random() < 0.6 or len(trips) == 1 else rng.randrange(1, min(5, len(trips)))
+        stop = min(self.checker.stop, time.monotonic() + 0.5)
+        partial, _ = self.realise_trip(partial, scout, trips[pick][1], z, stop)
+        return partial, sorted(removed)
+
+    def group_scouts(self, state, n, rng):
+        """n scouts for the group move: one picked like the trip move, then neighbours
+        weighted by how close their tours (or bases) come to the chosen ones."""
+        seed = self.trip_scout(state, rng)
+        if seed is None:
+            return []
+        scouts = [a for a in self.sc.aircraft if a.type == SCOUT]
+
+        def points(a):
+            return [a.home[:2]] + [t["point"] for t in state.tasks.get(a.id, ())]
+        chosen = [seed]
+        near = points(seed)
+        while len(chosen) < n:
+            rest = [a for a in scouts if a not in chosen]
+            if not rest:
+                break
+            weights = []
+            for a in rest:
+                d = min(hdist(p, q) for p in points(a) for q in near)
+                weights.append(1.0 / (1.0 + d / 1000.0) ** 2)
+            pick = rng.choices(rest, weights=weights)[0]
+            chosen.append(pick)
+            near += points(pick)
+        return chosen
+
+    def group_move(self, current, rng):
+        """Jointly re-plan n scouts (n from GROUP_SIZES) from the best combination of their
+        label-search trips over a shared contact pool. Returns (partial state, contact ids
+        removed) or None when the estimate finds nothing better than the current trips."""
+        n = rng.choice(GROUP_SIZES)
+        key = str(n)
+        self.lns["group_sizes"][key] = self.lns["group_sizes"].get(key, 0) + 1
+        scouts = self.group_scouts(current, n, rng)
+        if len(scouts) < 2:
+            return None
+        sids = [a.id for a in scouts]
+        mine = {t["cid"] for sid in sids for t in current.tasks.get(sid, ())}
+        others = {t["cid"] for s, tasks in current.tasks.items() if s not in sids for t in tasks}
+        near = [p for a in scouts for p in [a.home[:2]] + [t["point"] for t in current.tasks.get(a.id, ())]]
+        open_ = []
+        for c in self.sc.contacts:
+            if (c.cls in (HOSTILE, UNKNOWN) and c.window is not None and c.id not in current.served
+                    and c.id not in others and c.id not in self.matrix.banned
+                    and self.matrix.priority(c) > 0):
+                d = min(hdist(c.pos, p) for p in near)
+                if d < GROUP_RADIUS_M:
+                    open_.append((d, c.id))
+        pool = set(mine) | {cid for _, cid in sorted(open_)[:max(0, GROUP_POOL - len(mine))]}
+        partial, removed = self.strip_scouts(current, sids)
+        if partial is None:
+            return None
+        exclude = {c.id for c in self.sc.contacts if c.id not in pool} | set(partial.served)
+        start = time.monotonic()
+        bit = {cid: j for j, cid in enumerate(sorted(pool))}
+        lists, layers, cur = [], [], 0.0
+        for a in scouts:
+            route = current.routes.get(a.id)
+            z = max(w["z"] for w in route) if route else SCOUT_LAYERS[0]
+            cands = self.trip_candidates(a, partial.used, exclude, z)
+            order = tuple(t["cid"] for t in current.tasks.get(a.id, ()))
+            trips = trip_labels(self.sc, a, cands, z, top=GROUP_TRIPS, orders=(order,), cover=True)
+            have = [tr[0] for tr in trips if set(tr[1]) == set(order)]
+            cur += max(have) if have and order else 0.0
+            entries = [(tr[0], sum(1 << bit[c] for c in tr[1]), tr) for tr in trips if tr[0] > 0]
+            entries.append((0.0, 0, None))
+            entries.sort(key=lambda e: -e[0])
+            lists.append(entries)
+            layers.append(z)
+        got = best_disjoint([[(v, m) for v, m, _ in lst] for lst in lists], cur)
+        self.lns["group_label_s"] += time.monotonic() - start
+        if got is None:
+            return None
+        picked = [lists[i][k][2] for i, k in enumerate(got[1])]
+        new = {a.id: set(tr[1]) if tr else set() for a, tr in zip(scouts, picked)}
+        if all(new[a.id] == {t["cid"] for t in current.tasks.get(a.id, ())} for a in scouts):
+            return None
+        visits = sorted(((f, a, cid, z) for a, tr, z in zip(scouts, picked, layers) if tr
+                         for cid, f in zip(tr[1], tr[3])), key=lambda v: (v[0], v[2]))
+        stop = min(self.checker.stop, time.monotonic() + GROUP_MOVE_S)
+        partial, _ = self.realise_visits(partial, [(a, cid, z) for _, a, cid, z in visits], stop)
+        self.lns["group_realised"] += 1
+        return partial, sorted(removed)
+
     def improve(self, contacts, priorities, stop=None):
         """Large neighbourhood search: remove a few served contacts, then reinsert.
 
@@ -1401,7 +2138,7 @@ class Search:
             return sorted(served, key=lambda c: hdist(by_id[c].pos, seed.pos))[:k]
         if op == "worst":
             return sorted(served, key=lambda c: priorities[c] * rng.uniform(0.8, 1.2))[:k]
-        if op == "tour":
+        if op in ("tour", "trip"):
             tours = [[t["cid"] for t in tasks if t["cid"] in current.served and t["cid"] in by_id]
                      for tasks in current.tasks.values()]
             tours = [t for t in tours if t]
@@ -1415,21 +2152,36 @@ class Search:
         current, best = st["current"], st["best"]
         self.lns["iterations"] += 1
         served = sorted(c for c in current.served if c in by_id)
+        roll = None if self.adaptive else rng.random()
         if self.adaptive:
-            ops = list(self.weights)
+            ops = [o for o in self.weights if (TRIP_SEARCH or o != "trip")
+                   and (GROUP_SIZES or o != "group")]
             op = rng.choices(ops, weights=[self.weights[o] for o in ops])[0]
+        elif TRIP_SEARCH and roll < TRIP_SHARE:
+            op = "trip"
+        elif GROUP_SIZES and roll < TRIP_SHARE * bool(TRIP_SEARCH) + GROUP_SHARE:
+            op = "group"
         else:
             op = "related" if rng.random() < 0.5 else "random"
-        removed = []
+        removed, trip_centre = [], []
         partial = current
-        if served:
+        if op in ("trip", "group"):
+            self.lns[op + "_tried"] += 1
+            moved = self.trip_move(current, rng) if op == "trip" else self.group_move(current, rng)
+            if moved is None:
+                op = "related"
+            else:
+                partial, stripped = moved
+                trip_centre = [by_id[c].pos for c in stripped if c in by_id]
+                removed = [c for c in stripped if c in by_id and c not in partial.served]
+        if served and op not in ("trip", "group"):
             for cid in self.destroy(op, served, by_id, current, priorities, rng):
                 smaller = self.remove(partial, cid)
                 if smaller is not None:
                     partial = smaller
                     removed.append(cid)
         open_ = [c for c in contacts if c.id not in partial.served and c.id not in removed]
-        centre = [by_id[c].pos for c in removed] or [rng.choice(contacts).pos]
+        centre = [by_id[c].pos for c in removed] or trip_centre or [rng.choice(contacts).pos]
         near = sorted(open_, key=lambda c: min(hdist(c.pos, q) for q in centre))[:6]
         extra = rng.sample(open_, min(3, len(open_)))
         pool = list({c.id: c for c in near + extra}.values())
@@ -1452,8 +2204,10 @@ class Search:
         span = max(1e-6, self.stop - st["begin"])
         heat = st["temperature"] * max(0.0, self.stop - time.monotonic()) / span
         reward = 0.0
-        if delta > 1e-9 or (removed and heat > 0 and rng.random() < math.exp(delta / heat)):
+        if delta > 1e-9 or ((removed or op in ("trip", "group")) and heat > 0 and rng.random() < math.exp(delta / heat)):
             self.lns["accepted"] += 1
+            if op in ("trip", "group"):
+                self.lns[op + "_accepted"] += 1
             reward = 1.0 if delta > 1e-9 else 0.3
             current = st["current"] = self.record(partial, current, {"kind": "lns", "op": op,
                                                                      "removed": removed},
@@ -1461,6 +2215,9 @@ class Search:
             if current.score > best.score + 1e-9:
                 self.lns["improvements"] += 1
                 self.lns["gain"] += current.score - best.score
+                if op in ("trip", "group"):
+                    self.lns[op + "_improvements"] += 1
+                    self.lns[op + "_gain"] += current.score - best.score
                 st["best"], st["stale"], st["since_best"] = current, 0, 0
                 reward = 3.0
         if self.adaptive:
@@ -1509,6 +2266,7 @@ class Search:
                                                 "adaptive": self.adaptive,
                                                 "restarts": self.restarts},
                         **({"weights": dict(self.weights)} if self.adaptive else {})},
+                "trip_plan": dict(self.trip_stats),
                 "unserved": diagnostics["unserved"],
                 "unserved_points": diagnostics["unserved_points"],
                 "contacts": diagnostics["contacts"],

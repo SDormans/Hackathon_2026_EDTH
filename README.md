@@ -195,6 +195,49 @@ Same inputs, master vs this change, both with two concurrent benchmark workers p
 
 All plans were valid. Gains come from L4 (e.g. L4-401 1077.92 → 1118.71, L4-0 at 20 s 834.78 → 861.03); L1–L3 mostly tie but finish sooner. L4-402 regressed (613.23 → 593.99) and L4-2 at 20 s slightly (447.65 → 446.43): faster checks change which branches fit in the local time caps, so individual cases vary.
 
+### Scout trip label search
+
+On L4 the scouts are the bottleneck: they fly 9–16 km for 2–6 observations, and the choice of contacts each one chains matters more than how its route is shaped. `trip_labels` finds the best-value trips for one scout by resource-constrained label setting. A label is a chain of visits, with its finish time, Wh used, net value and visited set. Legs are straight lines using the `tour_estimate` speed, departure and energy model. Hostiles must also finish early enough for confirmation and their cheapest free team. Dominated labels are dropped, and each contact keeps at most 6. A run takes 1–8 ms per scout on L4. The search is used in two ways:
+
+- **LNS operator `trip`** (`TRIP_SEARCH`, 20% of LNS steps): removes one scout's tour and the strikes it confirms, then rebuilds it visit by visit from a better trip through `_serve`, retrying layers, angles and takeoff shifts. It reports `trip_tried`/`trip_accepted`/`trip_improvements`/`trip_gain` in the `lns` block.
+- **Trip-plan warm start** (`TRIP_PLAN`, at most 20% of the start-to-beam-end time): generates candidate trips for every scout at 70 m and 30 m. The candidates are the best trips, the best trip including each contact, the best trip without each of its two most valuable contacts, and two rounds of re-planning each scout around the others' chosen trips. Without that variety, every scout's top trips share the same few contacts and nothing can be traded. `pack_trips` then picks at most one trip per scout with no contact twice (weighted set packing: greedy, then swaps). The chosen plan is realised in observation-time order, recorded and repaired. Stats are in the `trip_plan` block.
+
+Same-run comparisons, 17 scenarios (8 board validation, L4 seeds 9–14, L3 seeds 3–5), 4 workers, default 45 s, all plans valid:
+
+| Run | base (035a098) | + trip LNS | + trip plan |
+|---|---:|---:|---:|
+| run 1 total | 13807.5 | 13889.4 | – |
+| run 2 total | 13740.3 | 13750.5 | 13918.9 |
+| run 2 L4 subtotal | 9907.7 | 9917.2 | 10074.5 |
+| run 2 board-8 subtotal | 4790.5 | 4821.3 | 4823.6 |
+
+Repeat runs of the same code differ by 0.4–1% in total; in a third run the committed version scored 14027.9. Step 2's gain over step 1 comes mostly from two large wins (L4-11 +104, L4-14 +53); it won 9 cases and lost 6. Under 4 parallel workers the trip plan reaches its time cap before realisation finishes on the largest cases. Two variants scored lower in the same run: capping generation at 40% of the share (−37) and generating at one layer only (−133).
+
+#### Joint re-plan of n scouts (LNS operator `group`)
+
+Moving one scout at a time stays in a local optimum. A model of the board L4 cases re-planned scouts one by one and reached the same contact set as the planner. Exchanging contacts between two scouts raised the model value by 60–80 per case. Most of that gain came from cheaper scout trips, not extra coverage. The `group` operator (`GROUP_SIZES`, `GROUP_SHARE` = 20% of LNS steps, alongside `trip`) works like this:
+
+- It picks n scouts: one is chosen like the `trip` move, and the rest are neighbours weighted by tour/base distance.
+- It pools their contacts with up to `GROUP_POOL` unserved positive-net contacts within 2 km of their tours.
+- It removes those tours and the strikes they confirm (`strip_scouts`).
+- It runs the label search for each scout over the pool, keeping the top 40 trips plus cover trips and the current tour as an extra order.
+- `best_disjoint` picks the best set of disjoint trips with a depth-first search and an upper-bound prune. The move goes ahead only if that set beats the estimated value of the current trips.
+- It realises the visits in observation-time order through `realise_visits`, taking at most 0.8 s per move. The normal LNS repair and acceptance follow.
+
+Counters in the `lns` block: `group_tried`, `group_realised`, `group_accepted`, `group_improvements`, `group_gain`, `group_label_s` and `group_sizes`.
+
+Same 17 scenarios, 4 versions per run, 4 workers, default 45 s. Base is master at de78902. All 136 plans were valid.
+
+| Run | base | n = 2 | n = 3 | n random 2–4 |
+|---|---:|---:|---:|---:|
+| run 1 total | 14203.3 | 14431.3 | 14367.1 | 14423.9 |
+| run 2 total | 14351.8 | 14337.1 | 14343.9 | 14368.6 |
+| sum of both | 28555.1 | 28768.4 | 28711.0 | 28792.5 |
+| L4 subtotal, sum | 20785.4 | 20975.5 | 20925.0 | 20987.4 |
+| board-8 subtotal, sum | 9859.7 | 9870.7 | 9879.2 | 9938.9 |
+
+Random n in 2–4 is the default. Its gain over base is +237 summed (+0.8%), but it comes almost entirely from run 1: run 2 is a tie within the 0.4–1% run-to-run noise. Against base, mix won 11 and lost 5 in run 1, and won 8 and lost 8 in run 2. Base itself moved by +149 between the runs. Per-case swings of ±40–60 on L4 go both ways; for example, L4-14 was +102 in run 1 and −64 in run 2. Over the two runs the group move improved the best plan 85 times (out of ~3500 tries). About 70% of tries pass the estimate gate and are realised, and LNS iterations drop by ~12% because a group move costs more than a `trip` move.
+
 ### Local benchmark results
 
 Measured on this machine with five-second search budgets. These are sampled scenarios, not a guarantee of performance on unseen inputs.
@@ -244,6 +287,27 @@ The most common attempt outcome is the reason. Ties go to the attempt that got f
 Scout failures account for 73 contacts and 3,756 points. A direct-flight check (`python3 analysis/scout_reach.py analysis/results/l4-unserved-diagnosis`) shows only 8 non-banned targets across the three scenarios that no scout can observe in time even flying straight from base at full speed (ignoring zones). Most scout failures therefore come from how tours are built (append-only, four nearest candidates), not from physics. `outranked` is the second lever: valid serves existed but the beam kept other branches. Time limits are a small factor (3 contacts). Collateral bans are unavailable points: they make "available points" totals look larger than what any plan can reach. Each L4 run completed 4–5 passes. The full run (report, scenarios, plans and logs) is committed in [analysis/results/l4-unserved-diagnosis/](analysis/results/l4-unserved-diagnosis/report.html).
 
 A generated L2-7 demo is available locally at `output/search/tree.html`, with its winning fleet animation at `output/flight.html`. Generated outputs are ignored by Git; use `--artifacts` to reproduce them.
+
+### Where the L2/L3 gap to the board leader comes from
+
+Board (sum per level): leader L2 562, L3 1587; us at 035a098 L2 ~547, L3 ~1552. Every non-banned unknown is served on all five L2/L3 board scenarios. The hostile set is the knapsack optimum over the light/heavy supply, and effector assignment is within 1 point of the optimal matching (straight-line energy). **The gap is energy only**, in two parts:
+
+1. **Effector climb** (fixed: `GROUND_STRIKES`). R2 bounds the altitude only of waypoints after the first and before the last, so a two-waypoint effector route (home → engagement at the contact, R_eng 3D) can fly at z = 0. That avoids e_climb × 30 m per effector, worth 5–19 Wh per L3 scenario before the fix. Members whose straight ground line enters a zone or protected area fly the 30 m route.
+2. **Scout tours** (partly fixed: `SCOUT_ENERGY_RANK`). Scouts differ by about ±30 % in energy per metre (L2-202: S01 7.9 J/m, S02/S03 10.4–10.7), but candidate scouts were ranked by added *distance*, so the cheapest scout was often left idle. Our scouts flew 24–29 km per L3 scenario. One tour through all observation disks without windows is 12–13 km. An offline VRPTW estimate (windows, R4 deadlines, horizon, battery) gives 51–69 Wh against our 71–82 Wh under the same model.
+
+Hand-built plans that use the planner's own builders (VRPTW tours, strikes re-timed, official scorer) score L2-201 295.87, L2-202 266.06 (one scout instead of two), L3-301 715.06, L3-302 418.77 (two scouts instead of four) and L3-303 444.72. That is **L2 561.9** (leader 562) and **L3 1578.6** (leader 1587), so these two causes account for nearly the whole gap. What remains is scout tour construction: fewer and better-chosen scouts per scenario.
+
+Benchmark, same run, four workers, 45 s, all plans valid:
+
+| Batch | 035a098 | + ground strikes | + energy-ranked scouts |
+|---|---:|---:|---:|
+| 17 cases (board-8, L4 9–14, L3 3–5) | 13745.67 | 13826.45 | **13928.02** (+1.3 %; 14 W / 3 L) |
+| board-8 | 4787.92 | 4803.09 | 4810.50 |
+| board L2 / L3 | 547.27 / 1543.35 | 549.12 / 1556.95 | 554.69 / 1570.18 |
+| L4 (8 cases) | 9922.37 | 9994.03 | 10052.34 |
+| L3 seeds 3–15 (separate run) | 6594.65 | | 6660.01 (+1.0 %; 12 W / 1 L) |
+
+In an earlier run, ground strikes alone gave 13763.04 → 13874.67 on the 17 cases and 6605.11 → 6647.56 on L3 seeds 3–15. Two changes were tested and dropped: trying the 30 m scout layer first (13816.67 against 13874.67 for ground strikes alone), and an LNS operator that removes a whole tour (no gain on L2-202 or L3-302).
 
 ## Leaderboard submission
 
