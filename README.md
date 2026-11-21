@@ -102,6 +102,25 @@ Greedy and our planner run separately on the **same generated input**, each with
 
 Generation and the external scoring calls are outside each planner's measured runtime. Parallel workers share CPU, so their timing and time-bounded search scores can differ from a single-worker run. Use `--workers 1` when assessing performance under the competition's per-scenario budget. A custom candidate can be compared using `--planner path/to/planner.py`. Existing output directories are rejected to prevent overwriting results.
 
+### Held-out batch, seeds 70–74, 45 s
+
+`python test_logger.py --workers 1 --seconds 45 --levels L1,L2,L3,L4 --seeds 70-74`: 20 cases not used for tuning (diagnosis used other seeds). Each candidate ran at the same time as a reference run of the previous commit; runs are in `history/20261121T*`. Every plan was valid in every run. The slowest full planner process took 45.9 s.
+
+| Run | Total | L1 | L2 | L3 | L4 | vs reference |
+|---|---:|---:|---:|---:|---:|---:|
+| 035a098 (previous commit) | 10645.84 | 513.35 | 1482.90 | 2872.08 | 5777.51 | |
+| 45 s default, validation cutoff at 50 s (kept) | 10637.52 | 513.35 | 1482.90 | 2868.77 | 5772.50 | −8.32 |
+| Same code, five more reference runs | 10615.36–10650.79 | 513.35 | 1482.90 | 2864.01–2876.89 | 5755.10–5781.68 | |
+| A: strike team members get their own takeoff slots | 10619.30 | 525.71 | 1483.80 | 2872.17 | 5737.62 | −22.18 |
+| B: 6 first scouts instead of 4 | 10613.41 | 513.35 | 1482.90 | 2871.37 | 5745.80 | −28.07 |
+| C: 30/75 m effector layer pair before the 40/85/130 m rotations | 10633.25 | 513.50 | 1484.94 | 2866.09 | 5768.71 | −6.24 |
+| D: strike team spacing up to 8 s | 10597.15 | 525.71 | 1482.83 | 2862.86 | 5725.76 | −42.34 |
+| E: A, only after every other strike setting failed | 10617.03 | 525.71 | 1482.91 | 2865.20 | 5743.21 | −33.76 |
+| F: check last-conflicting aircraft first (~7% more checks per second) | 10589.70 | 513.35 | 1482.90 | 2872.79 | 5720.66 | −51.55 |
+| G: extra 15 s scout departure shift | 10562.38 | 513.35 | 1482.91 | 2866.99 | 5699.14 | −52.98 |
+
+The safety change was kept as a requirement. A–G were not committed. Repeated runs of the same code differ by up to about 35 points in total, mostly on L4. Every change to strike or scout options lost 20–50 points on L4, even when L1 gained 12 points (A, D, E fix L1-74). Remaining R8 rejections on a diagnostic L4 run were mostly en route: effectors of one team converging on their target at the same layer, and effectors crossing scouts. Takeoffs from neighbouring pads were about 20%.
+
 ### LNS batch result
 
 Both planners ran at full budget under the same load, four workers each at the same time, alongside greedy. Seeds 3–5 were not used during development. The validation scenarios ran 16 planners at the same time on eight cores; the greedy total comes from PLAN.md. `--lns-share 0.6` scored 4391.13 on the seeds 3–5 batch, within run-to-run noise of the default.
