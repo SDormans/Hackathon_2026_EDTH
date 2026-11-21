@@ -242,6 +242,42 @@ python3 submit_to_board.py --token <TOKEN> --skip-submit
 
 The `--team` (default `ELARIS`) and `--server` (default `http://192.168.2.19:8080/`) flags can be overridden if needed. Plans are written to `board-plans/` and scenarios to `validation/`. The server keeps your best score per scenario, so resubmitting a worse plan never hurts.
 
+## Link-loss policy
+
+[policy.py](policy.py) is the optional link-loss hand-in (`Policy(scenario, plan, aircraft_id).step(obs)`).
+It needs `fleetkit.linkloss` from [AA-OpenProjects/AA-Hackathon-EDTH-202611](https://github.com/AA-OpenProjects/AA-Hackathon-EDTH-202611);
+the bundled kit in this repository does not include it.
+
+- Every aircraft knows the whole plan, so a peer still on its plan needs no message. Aircraft fly the plan silently by default.
+- An effector aborts (returns) when its target is reclassified or a known pop-up zone lies on its remaining route.
+  Return or hold is never chosen into a known zone.
+- Each step it tries continue, hold and return and keeps the first one that stays clear of predicted peers by
+  separation + 10 m over the next 6 s. If none is clear, it picks the option whose first separation loss is latest.
+- Off-plan aircraft send their route-clock state (`[tau*10, rate*10]`, about 12 bytes) after each change, every 10 s,
+  and every second while a peer is within 400 m. Peers extrapolate that state.
+- Scouts announce completed observations of contacts that effectors will engage; an effector waits up to 30 s at
+  the end of its route for a known confirmation (R4), then aborts. Sensed reclassifications and pop-up zones are relayed twice.
+
+```sh
+FLEETKIT_DIR=/path/to/AA-Hackathon-EDTH-202611/fleet-orchestration/fleet-kit \
+  python3 analysis/linkloss_eval.py --levels L1,L2,L3,L4 --seeds 0-4 --policies policy.py,broadcast,hold
+# add --sizing for the 20-cell range/capacity grid
+```
+
+Measured on 60 generated cases (L1-L4, seeds 0-14, greedy plans, kit events), 3 message seeds each:
+
+| Policy | 1000 m / 200 B/s S_loss | Retention | Failed runs | 250 m / 50 B/s S_loss | Failed runs | Msgs/aircraft/min |
+|---|---:|---:|---:|---:|---:|---:|
+| policy.py | 0.936 | 0.957 | 2/180 | 0.820 | 7/180 | 10.6 |
+| broadcast | 0.413 | 0.533 | 84/180 | 0.402 | 86/180 | 60.0 |
+| hold | 0.338 | 0.338 | 0/180 | 0.338 | 0/180 | 0 |
+| return | 0.330 | 0.330 | 6/180 | 0.330 | 6/180 | 0 |
+| continue | 0.000 | 0.000 | 180/180 | 0.000 | 180/180 | 0 |
+
+The kit's `handin/check_policy.py --levels L1,L2,L3 --seeds 0-3` passes all 12 cases with retention 1.000 and no failures.
+Policy compute is about 0.04 ms per call. Remaining failures are R8 losses in dense yield/abort interactions,
+mostly on L4 and at short ranges; a sizing cell needs zero failures, so short-range cells are the weak point.
+
 ## Hand-in
 
 Copy `planner.py`, `search_planner.py`, `candidate_matrix.py` and `tree_view.py` together. The official runner supplies `fleetkit` via `PYTHONPATH`. Local runs discover the bundled kit; `FLEETKIT_DIR` can explicitly select another copy. No third-party packages are required, and no changes to the official kit are needed.
