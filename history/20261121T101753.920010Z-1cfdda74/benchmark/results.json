@@ -1,0 +1,1833 @@
+[
+ {
+  "case": "L1:0",
+  "level": "L1",
+  "seed": 0,
+  "folder": "L1-0",
+  "generation_status": "ok",
+  "generation_seconds": 0.0,
+  "generation_note": "",
+  "diagnostics": {
+   "passes": 364,
+   "candidate_checks": 26440,
+   "rejections": {
+    "R8": 6058,
+    "R4": 6372
+   },
+   "unserved": {
+    "outranked": 1
+   },
+   "unserved_points": {
+    "outranked": 69.0
+   },
+   "contacts": {
+    "C01": {
+     "cls": "hostile",
+     "points": 69.0,
+     "served": false,
+     "attempts": 1856,
+     "outcomes": {
+      "no_team": 1371,
+      "accepted": 485
+     },
+     "rules": {
+      "strike_rule:R8": 2840,
+      "scout_rule:R4": 751
+     },
+     "reason": "outranked"
+    },
+    "C02": {
+     "cls": "hostile",
+     "points": 99.0,
+     "served": true,
+     "attempts": 1547,
+     "outcomes": {
+      "accepted": 693,
+      "no_team": 849,
+      "time_cap": 5
+     },
+     "rules": {
+      "strike_rule:R8": 2794,
+      "scout_rule:R4": 456
+     }
+    },
+    "C03": {
+     "cls": "hostile",
+     "points": 62.0,
+     "served": true,
+     "attempts": 1175,
+     "outcomes": {
+      "accepted": 1175
+     },
+     "rules": {
+      "scout_rule:R4": 1643,
+      "scout_rule:R8": 421
+     }
+    },
+    "C04": {
+     "cls": "unknown",
+     "points": 18.0,
+     "served": true,
+     "attempts": 2365,
+     "outcomes": {
+      "accepted": 2365
+     },
+     "rules": {
+      "scout_rule:R4": 3522
+     }
+    }
+   }
+  },
+  "baseline": {
+   "status": "ok",
+   "score": 123.82345874134069,
+   "seconds": 0.10899999999674037,
+   "served": [
+    "C02",
+    "C03",
+    "C04"
+   ],
+   "note": "",
+   "returncode": 0
+  },
+  "search": {
+   "status": "ok",
+   "score": 130.87768616267925,
+   "seconds": 4.264999999999418,
+   "served": [
+    "C02",
+    "C03",
+    "C04"
+   ],
+   "note": "",
+   "returncode": 0
+  },
+  "baseline_score": 123.82345874134069,
+  "baseline_seconds": 0.10899999999674037,
+  "search_score": 130.87768616267925,
+  "search_seconds": 4.264999999999418,
+  "improvement": 7.054227421338567,
+  "served": [
+   "C02",
+   "C03",
+   "C04"
+  ]
+ },
+ {
+  "case": "L2:7",
+  "level": "L2",
+  "seed": 7,
+  "folder": "L2-7",
+  "generation_status": "ok",
+  "generation_seconds": 0.0,
+  "generation_note": "",
+  "diagnostics": {
+   "passes": 80,
+   "candidate_checks": 21219,
+   "rejections": {
+    "R8": 6315,
+    "R4": 4162
+   },
+   "unserved": {
+    "outranked": 1,
+    "collateral_ban": 1
+   },
+   "unserved_points": {
+    "outranked": 67.0,
+    "collateral_ban": 42.0
+   },
+   "contacts": {
+    "C01": {
+     "cls": "hostile",
+     "points": 42.0,
+     "served": false,
+     "attempts": 0,
+     "outcomes": {},
+     "rules": {},
+     "reason": "collateral_ban"
+    },
+    "C02": {
+     "cls": "hostile",
+     "points": 70.0,
+     "served": true,
+     "attempts": 642,
+     "outcomes": {
+      "accepted": 580,
+      "time_cap": 2,
+      "no_team": 60
+     },
+     "rules": {
+      "strike_rule:R8": 1060,
+      "scout_rule:R8": 40,
+      "scout_rule:R4": 181
+     }
+    },
+    "C03": {
+     "cls": "hostile",
+     "points": 84.0,
+     "served": true,
+     "attempts": 356,
+     "outcomes": {
+      "accepted": 247,
+      "time_cap": 2,
+      "no_team": 107
+     },
+     "rules": {
+      "strike_rule:R8": 321,
+      "scout_rule:R8": 9,
+      "scout_rule:R4": 4
+     }
+    },
+    "C04": {
+     "cls": "hostile",
+     "points": 59.0,
+     "served": true,
+     "attempts": 626,
+     "outcomes": {
+      "accepted": 516,
+      "time_cap": 3,
+      "no_team": 107
+     },
+     "rules": {
+      "strike_rule:R8": 3179,
+      "scout_rule:R4": 36
+     }
+    },
+    "C05": {
+     "cls": "hostile",
+     "points": 75.0,
+     "served": true,
+     "attempts": 391,
+     "outcomes": {
+      "accepted": 390,
+      "time_cap": 1
+     },
+     "rules": {
+      "scout_rule:R4": 514,
+      "scout_rule:R8": 112
+     }
+    },
+    "C06": {
+     "cls": "hostile",
+     "points": 67.0,
+     "served": false,
+     "attempts": 925,
+     "outcomes": {
+      "no_team": 787,
+      "accepted": 138
+     },
+     "rules": {
+      "strike_rule:R8": 986,
+      "scout_rule:R8": 16,
+      "scout_rule:R4": 259
+     },
+     "reason": "outranked"
+    },
+    "C07": {
+     "cls": "unknown",
+     "points": 24.0,
+     "served": true,
+     "attempts": 626,
+     "outcomes": {
+      "accepted": 626
+     },
+     "rules": {
+      "scout_rule:R4": 1066,
+      "scout_rule:R8": 12
+     }
+    },
+    "C08": {
+     "cls": "unknown",
+     "points": 21.0,
+     "served": true,
+     "attempts": 562,
+     "outcomes": {
+      "accepted": 560,
+      "time_cap": 2
+     },
+     "rules": {
+      "scout_rule:R8": 127,
+      "scout_rule:R4": 75
+     }
+    },
+    "C09": {
+     "cls": "unknown",
+     "points": 29.0,
+     "served": true,
+     "attempts": 663,
+     "outcomes": {
+      "accepted": 662,
+      "time_cap": 1
+     },
+     "rules": {
+      "scout_rule:R4": 2027,
+      "scout_rule:R8": 438
+     }
+    }
+   }
+  },
+  "baseline": {
+   "status": "ok",
+   "score": 266.2345585040883,
+   "seconds": 0.15600000000267755,
+   "served": [
+    "C02",
+    "C03",
+    "C04",
+    "C05",
+    "C07",
+    "C08",
+    "C09"
+   ],
+   "note": "",
+   "returncode": 0
+  },
+  "search": {
+   "status": "ok",
+   "score": 279.5060444747627,
+   "seconds": 5.139999999999418,
+   "served": [
+    "C02",
+    "C03",
+    "C04",
+    "C05",
+    "C07",
+    "C08",
+    "C09"
+   ],
+   "note": "",
+   "returncode": 0
+  },
+  "baseline_score": 266.2345585040883,
+  "baseline_seconds": 0.15600000000267755,
+  "search_score": 279.5060444747627,
+  "search_seconds": 5.139999999999418,
+  "improvement": 13.271485970674405,
+  "served": [
+   "C02",
+   "C03",
+   "C04",
+   "C05",
+   "C07",
+   "C08",
+   "C09"
+  ]
+ },
+ {
+  "case": "L3:1",
+  "level": "L3",
+  "seed": 1,
+  "folder": "L3-1",
+  "generation_status": "ok",
+  "generation_seconds": 0.25,
+  "generation_note": "",
+  "diagnostics": {
+   "passes": 4,
+   "candidate_checks": 11400,
+   "rejections": {
+    "R7": 528,
+    "R6": 237,
+    "R8": 6484,
+    "R1": 1717,
+    "R4": 663,
+    "R3": 41
+   },
+   "unserved": {
+    "collateral_ban": 2,
+    "scout_route": 1,
+    "time_cap": 1,
+    "outranked": 1
+   },
+   "unserved_points": {
+    "collateral_ban": 150.0,
+    "scout_route": 61.0,
+    "time_cap": 47.0,
+    "outranked": 10.0
+   },
+   "contacts": {
+    "C01": {
+     "cls": "hostile",
+     "points": 59.0,
+     "served": false,
+     "attempts": 0,
+     "outcomes": {},
+     "rules": {},
+     "reason": "collateral_ban"
+    },
+    "C02": {
+     "cls": "hostile",
+     "points": 82.0,
+     "served": true,
+     "attempts": 41,
+     "outcomes": {
+      "accepted": 24,
+      "scout_rule:R1": 13,
+      "time_cap": 3,
+      "scout_rule:R4": 1
+     },
+     "rules": {
+      "scout_rule:R1": 666,
+      "scout_rule:R8": 184,
+      "strike_rule:R8": 83,
+      "scout_rule:R4": 126,
+      "scout_rule:R3": 9
+     }
+    },
+    "C03": {
+     "cls": "hostile",
+     "points": 47.0,
+     "served": false,
+     "attempts": 49,
+     "outcomes": {
+      "time_cap": 34,
+      "not_improving": 12,
+      "no_team": 3
+     },
+     "rules": {
+      "scout_rule:R1": 599,
+      "scout_rule:R8": 107,
+      "strike_rule:R8": 4481,
+      "scout_rule:R4": 208,
+      "scout_rule:R3": 1
+     },
+     "reason": "time_cap"
+    },
+    "C04": {
+     "cls": "hostile",
+     "points": 91.0,
+     "served": false,
+     "attempts": 0,
+     "outcomes": {},
+     "rules": {},
+     "reason": "collateral_ban"
+    },
+    "C05": {
+     "cls": "hostile",
+     "points": 88.0,
+     "served": true,
+     "attempts": 26,
+     "outcomes": {
+      "accepted": 26
+     },
+     "rules": {
+      "strike_rule:R8": 28,
+      "scout_rule:R8": 2
+     }
+    },
+    "C06": {
+     "cls": "hostile",
+     "points": 77.0,
+     "served": true,
+     "attempts": 29,
+     "outcomes": {
+      "scout_rule:R1": 11,
+      "accepted": 17,
+      "time_cap": 1
+     },
+     "rules": {
+      "scout_rule:R1": 260,
+      "scout_rule:R8": 22,
+      "strike_rule:R8": 80,
+      "scout_rule:R3": 12
+     }
+    },
+    "C07": {
+     "cls": "hostile",
+     "points": 83.0,
+     "served": true,
+     "attempts": 28,
+     "outcomes": {
+      "accepted": 25,
+      "time_cap": 3
+     },
+     "rules": {
+      "scout_rule:R8": 76,
+      "strike_rule:R8": 194,
+      "scout_rule:R4": 90,
+      "scout_rule:R1": 6
+     }
+    },
+    "C08": {
+     "cls": "hostile",
+     "points": 90.0,
+     "served": true,
+     "attempts": 11,
+     "outcomes": {
+      "accepted": 11
+     },
+     "rules": {
+      "strike_rule:R8": 45,
+      "scout_rule:R8": 1
+     }
+    },
+    "C09": {
+     "cls": "hostile",
+     "points": 81.0,
+     "served": true,
+     "attempts": 32,
+     "outcomes": {
+      "accepted": 27,
+      "time_cap": 1,
+      "scout_rule:R1": 1,
+      "scout_route": 3
+     },
+     "rules": {
+      "scout_rule:R8": 37,
+      "scout_rule:R4": 81,
+      "strike_rule:R8": 2,
+      "scout_rule:R1": 12
+     }
+    },
+    "C10": {
+     "cls": "hostile",
+     "points": 90.0,
+     "served": true,
+     "attempts": 25,
+     "outcomes": {
+      "accepted": 24,
+      "time_cap": 1
+     },
+     "rules": {
+      "strike_rule:R8": 152,
+      "scout_rule:R8": 24,
+      "scout_rule:R4": 18,
+      "scout_rule:R1": 12
+     }
+    },
+    "C11": {
+     "cls": "hostile",
+     "points": 61.0,
+     "served": false,
+     "attempts": 44,
+     "outcomes": {
+      "scout_route": 44
+     },
+     "rules": {},
+     "reason": "scout_route"
+    },
+    "C12": {
+     "cls": "hostile",
+     "points": 67.0,
+     "served": true,
+     "attempts": 34,
+     "outcomes": {
+      "accepted": 32,
+      "time_cap": 2
+     },
+     "rules": {
+      "strike_rule:R8": 16,
+      "scout_rule:R8": 11
+     }
+    },
+    "C13": {
+     "cls": "hostile",
+     "points": 56.0,
+     "served": true,
+     "attempts": 31,
+     "outcomes": {
+      "accepted": 21,
+      "scout_rule:R8": 5,
+      "time_cap": 1,
+      "scout_rule:R4": 2,
+      "scout_rule:R1": 2
+     },
+     "rules": {
+      "scout_rule:R8": 88,
+      "strike_rule:R8": 103,
+      "scout_rule:R4": 53,
+      "scout_rule:R3": 18,
+      "scout_rule:R1": 4
+     }
+    },
+    "C14": {
+     "cls": "hostile",
+     "points": 49.0,
+     "served": true,
+     "attempts": 32,
+     "outcomes": {
+      "accepted": 31,
+      "time_cap": 1
+     },
+     "rules": {
+      "strike_rule:R8": 18
+     }
+    },
+    "C15": {
+     "cls": "unknown",
+     "points": 15.0,
+     "served": true,
+     "attempts": 26,
+     "outcomes": {
+      "scout_rule:R8": 6,
+      "accepted": 19,
+      "time_cap": 1
+     },
+     "rules": {
+      "scout_rule:R8": 132
+     }
+    },
+    "C16": {
+     "cls": "unknown",
+     "points": 17.0,
+     "served": true,
+     "attempts": 28,
+     "outcomes": {
+      "accepted": 15,
+      "scout_route": 12,
+      "time_cap": 1
+     },
+     "rules": {
+      "scout_rule:R8": 94,
+      "scout_rule:R4": 12
+     }
+    },
+    "C17": {
+     "cls": "unknown",
+     "points": 26.0,
+     "served": true,
+     "attempts": 30,
+     "outcomes": {
+      "accepted": 30
+     },
+     "rules": {
+      "scout_rule:R4": 24,
+      "scout_rule:R8": 12
+     }
+    },
+    "C18": {
+     "cls": "unknown",
+     "points": 10.0,
+     "served": true,
+     "attempts": 24,
+     "outcomes": {
+      "accepted": 24
+     },
+     "rules": {
+      "scout_rule:R8": 48,
+      "scout_rule:R4": 22
+     }
+    },
+    "C19": {
+     "cls": "unknown",
+     "points": 17.0,
+     "served": true,
+     "attempts": 31,
+     "outcomes": {
+      "accepted": 24,
+      "scout_route": 5,
+      "time_cap": 1,
+      "scout_rule:R1": 1
+     },
+     "rules": {
+      "scout_rule:R8": 48,
+      "scout_rule:R4": 8,
+      "scout_rule:R3": 1,
+      "scout_rule:R1": 1
+     }
+    },
+    "C20": {
+     "cls": "unknown",
+     "points": 10.0,
+     "served": false,
+     "attempts": 45,
+     "outcomes": {
+      "scout_rule:R8": 11,
+      "accepted": 16,
+      "time_cap": 1,
+      "scout_rule:R1": 4,
+      "scout_route": 13
+     },
+     "rules": {
+      "scout_rule:R8": 180,
+      "scout_rule:R4": 3,
+      "scout_rule:R1": 85
+     },
+     "reason": "outranked"
+    }
+   }
+  },
+  "baseline": {
+   "status": "ok",
+   "score": 463.8823613828704,
+   "seconds": 1.0,
+   "served": [
+    "C02",
+    "C05",
+    "C07",
+    "C08",
+    "C09",
+    "C10",
+    "C12",
+    "C13",
+    "C14",
+    "C17",
+    "C18",
+    "C19",
+    "C20"
+   ],
+   "note": "",
+   "returncode": 0
+  },
+  "search": {
+   "status": "ok",
+   "score": 517.4165968640764,
+   "seconds": 5.125,
+   "served": [
+    "C02",
+    "C05",
+    "C06",
+    "C07",
+    "C08",
+    "C09",
+    "C10",
+    "C12",
+    "C13",
+    "C14",
+    "C15",
+    "C16",
+    "C17",
+    "C18",
+    "C19"
+   ],
+   "note": "",
+   "returncode": 0
+  },
+  "baseline_score": 463.8823613828704,
+  "baseline_seconds": 1.0,
+  "search_score": 517.4165968640764,
+  "search_seconds": 5.125,
+  "improvement": 53.534235481206,
+  "served": [
+   "C02",
+   "C05",
+   "C06",
+   "C07",
+   "C08",
+   "C09",
+   "C10",
+   "C12",
+   "C13",
+   "C14",
+   "C15",
+   "C16",
+   "C17",
+   "C18",
+   "C19"
+  ]
+ },
+ {
+  "case": "L4:0",
+  "level": "L4",
+  "seed": 0,
+  "folder": "L4-0",
+  "generation_status": "ok",
+  "generation_seconds": 0.0930000000007567,
+  "generation_note": "",
+  "diagnostics": {
+   "passes": 2,
+   "candidate_checks": 12865,
+   "rejections": {
+    "R6": 192,
+    "R7": 354,
+    "R3": 1877,
+    "R8": 2883,
+    "R4": 1543,
+    "R1": 4872
+   },
+   "unserved": {
+    "collateral_ban": 17,
+    "scout_route": 15,
+    "outranked": 5,
+    "scout_rule:R1": 4
+   },
+   "unserved_points": {
+    "collateral_ban": 1255.0,
+    "scout_route": 858.0,
+    "outranked": 257.0,
+    "scout_rule:R1": 193.0
+   },
+   "contacts": {
+    "C01": {
+     "cls": "hostile",
+     "points": 61.0,
+     "served": false,
+     "attempts": 0,
+     "outcomes": {},
+     "rules": {},
+     "reason": "collateral_ban"
+    },
+    "C02": {
+     "cls": "hostile",
+     "points": 80.0,
+     "served": false,
+     "attempts": 20,
+     "outcomes": {
+      "time_cap": 1,
+      "scout_route": 19
+     },
+     "rules": {},
+     "reason": "scout_route"
+    },
+    "C03": {
+     "cls": "hostile",
+     "points": 42.0,
+     "served": false,
+     "attempts": 0,
+     "outcomes": {},
+     "rules": {},
+     "reason": "collateral_ban"
+    },
+    "C04": {
+     "cls": "hostile",
+     "points": 51.0,
+     "served": false,
+     "attempts": 26,
+     "outcomes": {
+      "scout_rule:R1": 20,
+      "scout_route": 6
+     },
+     "rules": {
+      "scout_rule:R1": 318
+     },
+     "reason": "scout_rule:R1"
+    },
+    "C05": {
+     "cls": "hostile",
+     "points": 71.0,
+     "served": false,
+     "attempts": 30,
+     "outcomes": {
+      "scout_route": 8,
+      "time_cap": 1,
+      "accepted": 9,
+      "scout_rule:R8": 12
+     },
+     "rules": {
+      "strike_rule:R8": 50,
+      "scout_rule:R8": 150,
+      "scout_rule:R3": 12
+     },
+     "reason": "outranked"
+    },
+    "C06": {
+     "cls": "hostile",
+     "points": 96.0,
+     "served": true,
+     "attempts": 13,
+     "outcomes": {
+      "accepted": 9,
+      "time_cap": 1,
+      "scout_rule:R4": 2,
+      "scout_rule:R3": 1
+     },
+     "rules": {
+      "strike_rule:R8": 70,
+      "scout_rule:R8": 24,
+      "scout_rule:R4": 37,
+      "scout_rule:R3": 24,
+      "scout_rule:R1": 1
+     }
+    },
+    "C07": {
+     "cls": "hostile",
+     "points": 53.0,
+     "served": true,
+     "attempts": 19,
+     "outcomes": {
+      "accepted": 5,
+      "time_cap": 2,
+      "scout_rule:R1": 7,
+      "scout_rule:R3": 5
+     },
+     "rules": {
+      "strike_rule:R8": 1,
+      "scout_rule:R1": 429,
+      "scout_rule:R3": 60
+     }
+    },
+    "C08": {
+     "cls": "hostile",
+     "points": 98.0,
+     "served": false,
+     "attempts": 0,
+     "outcomes": {},
+     "rules": {},
+     "reason": "collateral_ban"
+    },
+    "C09": {
+     "cls": "hostile",
+     "points": 62.0,
+     "served": false,
+     "attempts": 0,
+     "outcomes": {},
+     "rules": {},
+     "reason": "collateral_ban"
+    },
+    "C10": {
+     "cls": "hostile",
+     "points": 94.0,
+     "served": false,
+     "attempts": 22,
+     "outcomes": {
+      "time_cap": 2,
+      "scout_rule:R1": 5,
+      "scout_route": 10,
+      "accepted": 5
+     },
+     "rules": {
+      "scout_rule:R1": 69,
+      "strike_rule:R8": 31
+     },
+     "reason": "outranked"
+    },
+    "C11": {
+     "cls": "hostile",
+     "points": 74.0,
+     "served": false,
+     "attempts": 0,
+     "outcomes": {},
+     "rules": {},
+     "reason": "collateral_ban"
+    },
+    "C12": {
+     "cls": "hostile",
+     "points": 51.0,
+     "served": true,
+     "attempts": 20,
+     "outcomes": {
+      "accepted": 18,
+      "time_cap": 1,
+      "scout_rule:R3": 1
+     },
+     "rules": {
+      "strike_rule:R8": 10,
+      "scout_rule:R4": 108,
+      "scout_rule:R3": 36
+     }
+    },
+    "C13": {
+     "cls": "hostile",
+     "points": 93.0,
+     "served": false,
+     "attempts": 0,
+     "outcomes": {},
+     "rules": {},
+     "reason": "collateral_ban"
+    },
+    "C14": {
+     "cls": "hostile",
+     "points": 43.0,
+     "served": false,
+     "attempts": 24,
+     "outcomes": {
+      "scout_route": 18,
+      "scout_rule:R1": 6
+     },
+     "rules": {
+      "scout_rule:R1": 72
+     },
+     "reason": "scout_route"
+    },
+    "C15": {
+     "cls": "hostile",
+     "points": 94.0,
+     "served": false,
+     "attempts": 0,
+     "outcomes": {},
+     "rules": {},
+     "reason": "collateral_ban"
+    },
+    "C16": {
+     "cls": "hostile",
+     "points": 86.0,
+     "served": false,
+     "attempts": 22,
+     "outcomes": {
+      "scout_rule:R1": 15,
+      "scout_route": 5,
+      "time_cap": 2
+     },
+     "rules": {
+      "scout_rule:R1": 200
+     },
+     "reason": "scout_rule:R1"
+    },
+    "C17": {
+     "cls": "hostile",
+     "points": 84.0,
+     "served": true,
+     "attempts": 20,
+     "outcomes": {
+      "accepted": 13,
+      "scout_rule:R1": 6,
+      "time_cap": 1
+     },
+     "rules": {
+      "strike_rule:R8": 219,
+      "scout_rule:R3": 72,
+      "scout_rule:R1": 403,
+      "scout_rule:R8": 36,
+      "scout_rule:R4": 91
+     }
+    },
+    "C18": {
+     "cls": "hostile",
+     "points": 88.0,
+     "served": true,
+     "attempts": 21,
+     "outcomes": {
+      "accepted": 20,
+      "time_cap": 1
+     },
+     "rules": {
+      "strike_rule:R8": 63,
+      "scout_rule:R3": 72,
+      "scout_rule:R1": 24
+     }
+    },
+    "C19": {
+     "cls": "hostile",
+     "points": 60.0,
+     "served": false,
+     "attempts": 29,
+     "outcomes": {
+      "scout_route": 16,
+      "accepted": 2,
+      "scout_rule:R1": 9,
+      "scout_rule:R3": 2
+     },
+     "rules": {
+      "scout_rule:R8": 7,
+      "scout_rule:R4": 16,
+      "scout_rule:R1": 292,
+      "scout_rule:R3": 23
+     },
+     "reason": "outranked"
+    },
+    "C20": {
+     "cls": "hostile",
+     "points": 81.0,
+     "served": false,
+     "attempts": 23,
+     "outcomes": {
+      "scout_route": 17,
+      "scout_rule:R1": 6
+     },
+     "rules": {
+      "scout_rule:R1": 66
+     },
+     "reason": "scout_route"
+    },
+    "C21": {
+     "cls": "hostile",
+     "points": 63.0,
+     "served": false,
+     "attempts": 0,
+     "outcomes": {},
+     "rules": {},
+     "reason": "collateral_ban"
+    },
+    "C22": {
+     "cls": "hostile",
+     "points": 97.0,
+     "served": false,
+     "attempts": 20,
+     "outcomes": {
+      "scout_route": 13,
+      "scout_rule:R3": 6,
+      "time_cap": 1
+     },
+     "rules": {
+      "scout_rule:R3": 6,
+      "strike_rule:R8": 9
+     },
+     "reason": "scout_route"
+    },
+    "C23": {
+     "cls": "hostile",
+     "points": 70.0,
+     "served": true,
+     "attempts": 20,
+     "outcomes": {
+      "scout_rule:R3": 6,
+      "scout_rule:R8": 4,
+      "time_cap": 3,
+      "accepted": 7
+     },
+     "rules": {
+      "scout_rule:R3": 78,
+      "scout_rule:R8": 137,
+      "strike_rule:R8": 33,
+      "scout_rule:R4": 1
+     }
+    },
+    "C24": {
+     "cls": "hostile",
+     "points": 59.0,
+     "served": true,
+     "attempts": 21,
+     "outcomes": {
+      "accepted": 19,
+      "time_cap": 2
+     },
+     "rules": {
+      "strike_rule:R8": 19,
+      "scout_rule:R8": 40,
+      "scout_rule:R4": 24,
+      "scout_rule:R3": 12
+     }
+    },
+    "C25": {
+     "cls": "hostile",
+     "points": 64.0,
+     "served": true,
+     "attempts": 31,
+     "outcomes": {
+      "scout_route": 11,
+      "accepted": 9,
+      "time_cap": 2,
+      "scout_rule:R1": 4,
+      "scout_rule:R3": 5
+     },
+     "rules": {
+      "scout_rule:R8": 9,
+      "strike_rule:R8": 58,
+      "scout_rule:R1": 144,
+      "scout_rule:R3": 60
+     }
+    },
+    "C26": {
+     "cls": "hostile",
+     "points": 50.0,
+     "served": false,
+     "attempts": 24,
+     "outcomes": {
+      "scout_route": 22,
+      "time_cap": 2
+     },
+     "rules": {},
+     "reason": "scout_route"
+    },
+    "C27": {
+     "cls": "hostile",
+     "points": 96.0,
+     "served": true,
+     "attempts": 18,
+     "outcomes": {
+      "accepted": 15,
+      "time_cap": 3
+     },
+     "rules": {
+      "scout_rule:R8": 12,
+      "strike_rule:R8": 388,
+      "scout_rule:R4": 6,
+      "scout_rule:R3": 24
+     }
+    },
+    "C28": {
+     "cls": "hostile",
+     "points": 55.0,
+     "served": false,
+     "attempts": 0,
+     "outcomes": {},
+     "rules": {},
+     "reason": "collateral_ban"
+    },
+    "C29": {
+     "cls": "hostile",
+     "points": 40.0,
+     "served": false,
+     "attempts": 30,
+     "outcomes": {
+      "scout_route": 18,
+      "time_cap": 3,
+      "scout_rule:R3": 6,
+      "scout_rule:R8": 2,
+      "scout_rule:R4": 1
+     },
+     "rules": {
+      "strike_rule:R8": 87,
+      "scout_rule:R3": 81,
+      "scout_rule:R8": 54,
+      "scout_rule:R4": 18
+     },
+     "reason": "scout_route"
+    },
+    "C30": {
+     "cls": "hostile",
+     "points": 93.0,
+     "served": true,
+     "attempts": 20,
+     "outcomes": {
+      "accepted": 20
+     },
+     "rules": {
+      "strike_rule:R8": 52,
+      "scout_rule:R3": 144,
+      "scout_rule:R8": 10,
+      "scout_rule:R4": 28
+     }
+    },
+    "C31": {
+     "cls": "hostile",
+     "points": 69.0,
+     "served": false,
+     "attempts": 0,
+     "outcomes": {},
+     "rules": {},
+     "reason": "collateral_ban"
+    },
+    "C32": {
+     "cls": "hostile",
+     "points": 81.0,
+     "served": false,
+     "attempts": 0,
+     "outcomes": {},
+     "rules": {},
+     "reason": "collateral_ban"
+    },
+    "C33": {
+     "cls": "hostile",
+     "points": 47.0,
+     "served": false,
+     "attempts": 0,
+     "outcomes": {},
+     "rules": {},
+     "reason": "collateral_ban"
+    },
+    "C34": {
+     "cls": "hostile",
+     "points": 72.0,
+     "served": false,
+     "attempts": 23,
+     "outcomes": {
+      "scout_route": 17,
+      "scout_rule:R3": 6
+     },
+     "rules": {
+      "scout_rule:R3": 12
+     },
+     "reason": "scout_route"
+    },
+    "C35": {
+     "cls": "hostile",
+     "points": 93.0,
+     "served": true,
+     "attempts": 16,
+     "outcomes": {
+      "accepted": 10,
+      "scout_rule:R1": 4,
+      "time_cap": 1,
+      "scout_rule:R3": 1
+     },
+     "rules": {
+      "scout_rule:R3": 100,
+      "scout_rule:R1": 36
+     }
+    },
+    "C36": {
+     "cls": "hostile",
+     "points": 70.0,
+     "served": true,
+     "attempts": 18,
+     "outcomes": {
+      "accepted": 18
+     },
+     "rules": {
+      "scout_rule:R8": 6,
+      "scout_rule:R4": 6,
+      "strike_rule:R8": 172,
+      "scout_rule:R3": 144
+     }
+    },
+    "C37": {
+     "cls": "hostile",
+     "points": 69.0,
+     "served": false,
+     "attempts": 0,
+     "outcomes": {},
+     "rules": {},
+     "reason": "collateral_ban"
+    },
+    "C38": {
+     "cls": "hostile",
+     "points": 61.0,
+     "served": false,
+     "attempts": 22,
+     "outcomes": {
+      "scout_route": 16,
+      "scout_rule:R1": 6
+     },
+     "rules": {
+      "scout_rule:R1": 72
+     },
+     "reason": "scout_route"
+    },
+    "C39": {
+     "cls": "hostile",
+     "points": 50.0,
+     "served": true,
+     "attempts": 20,
+     "outcomes": {
+      "time_cap": 3,
+      "accepted": 12,
+      "scout_rule:R3": 5
+     },
+     "rules": {
+      "scout_rule:R8": 7,
+      "scout_rule:R3": 72
+     }
+    },
+    "C40": {
+     "cls": "hostile",
+     "points": 90.0,
+     "served": false,
+     "attempts": 22,
+     "outcomes": {
+      "scout_route": 21,
+      "time_cap": 1
+     },
+     "rules": {},
+     "reason": "scout_route"
+    },
+    "C41": {
+     "cls": "hostile",
+     "points": 97.0,
+     "served": true,
+     "attempts": 9,
+     "outcomes": {
+      "accepted": 9
+     },
+     "rules": {
+      "scout_rule:R4": 24,
+      "scout_rule:R8": 5
+     }
+    },
+    "C42": {
+     "cls": "hostile",
+     "points": 86.0,
+     "served": false,
+     "attempts": 0,
+     "outcomes": {},
+     "rules": {},
+     "reason": "collateral_ban"
+    },
+    "C43": {
+     "cls": "hostile",
+     "points": 78.0,
+     "served": true,
+     "attempts": 22,
+     "outcomes": {
+      "time_cap": 3,
+      "scout_route": 11,
+      "scout_rule:R8": 3,
+      "accepted": 3,
+      "scout_rule:R1": 2
+     },
+     "rules": {
+      "scout_rule:R8": 115,
+      "strike_rule:R8": 23,
+      "scout_rule:R3": 2,
+      "scout_rule:R1": 24
+     }
+    },
+    "C44": {
+     "cls": "hostile",
+     "points": 88.0,
+     "served": false,
+     "attempts": 0,
+     "outcomes": {},
+     "rules": {},
+     "reason": "collateral_ban"
+    },
+    "C45": {
+     "cls": "hostile",
+     "points": 100.0,
+     "served": false,
+     "attempts": 0,
+     "outcomes": {},
+     "rules": {},
+     "reason": "collateral_ban"
+    },
+    "C46": {
+     "cls": "hostile",
+     "points": 80.0,
+     "served": false,
+     "attempts": 22,
+     "outcomes": {
+      "scout_route": 21,
+      "time_cap": 1
+     },
+     "rules": {},
+     "reason": "scout_route"
+    },
+    "C47": {
+     "cls": "hostile",
+     "points": 73.0,
+     "served": false,
+     "attempts": 0,
+     "outcomes": {},
+     "rules": {},
+     "reason": "collateral_ban"
+    },
+    "C48": {
+     "cls": "hostile",
+     "points": 96.0,
+     "served": true,
+     "attempts": 21,
+     "outcomes": {
+      "accepted": 13,
+      "time_cap": 4,
+      "scout_rule:R4": 1,
+      "scout_rule:R3": 3
+     },
+     "rules": {
+      "scout_rule:R8": 23,
+      "scout_rule:R4": 53,
+      "strike_rule:R8": 78,
+      "scout_rule:R3": 79,
+      "scout_rule:R1": 12
+     }
+    },
+    "C49": {
+     "cls": "hostile",
+     "points": 67.0,
+     "served": true,
+     "attempts": 20,
+     "outcomes": {
+      "accepted": 17,
+      "time_cap": 1,
+      "scout_rule:R4": 1,
+      "scout_rule:R1": 1
+     },
+     "rules": {
+      "scout_rule:R8": 6,
+      "strike_rule:R8": 65,
+      "scout_rule:R1": 58,
+      "scout_rule:R4": 8
+     }
+    },
+    "C50": {
+     "cls": "hostile",
+     "points": 98.0,
+     "served": false,
+     "attempts": 17,
+     "outcomes": {
+      "scout_route": 16,
+      "time_cap": 1
+     },
+     "rules": {},
+     "reason": "scout_route"
+    },
+    "C51": {
+     "cls": "unknown",
+     "points": 11.0,
+     "served": false,
+     "attempts": 18,
+     "outcomes": {
+      "accepted": 12,
+      "scout_rule:R3": 2,
+      "scout_rule:R4": 2,
+      "scout_rule:R8": 2
+     },
+     "rules": {
+      "scout_rule:R8": 119,
+      "scout_rule:R4": 126,
+      "scout_rule:R3": 36,
+      "scout_rule:R1": 3
+     },
+     "reason": "outranked"
+    },
+    "C52": {
+     "cls": "unknown",
+     "points": 18.0,
+     "served": true,
+     "attempts": 18,
+     "outcomes": {
+      "accepted": 16,
+      "time_cap": 2
+     },
+     "rules": {
+      "scout_rule:R8": 115,
+      "scout_rule:R4": 49
+     }
+    },
+    "C53": {
+     "cls": "unknown",
+     "points": 20.0,
+     "served": true,
+     "attempts": 19,
+     "outcomes": {
+      "accepted": 18,
+      "time_cap": 1
+     },
+     "rules": {
+      "scout_rule:R4": 38,
+      "scout_rule:R8": 14,
+      "scout_rule:R1": 15
+     }
+    },
+    "C54": {
+     "cls": "unknown",
+     "points": 21.0,
+     "served": false,
+     "attempts": 36,
+     "outcomes": {
+      "scout_route": 12,
+      "scout_rule:R8": 4,
+      "time_cap": 2,
+      "scout_rule:R3": 1,
+      "scout_rule:R4": 13,
+      "accepted": 4
+     },
+     "rules": {
+      "scout_rule:R8": 130,
+      "scout_rule:R4": 339,
+      "scout_rule:R3": 12
+     },
+     "reason": "outranked"
+    },
+    "C55": {
+     "cls": "unknown",
+     "points": 29.0,
+     "served": true,
+     "attempts": 19,
+     "outcomes": {
+      "accepted": 9,
+      "time_cap": 1,
+      "scout_rule:R1": 3,
+      "scout_rule:R3": 6
+     },
+     "rules": {
+      "scout_rule:R8": 14,
+      "scout_rule:R1": 36,
+      "scout_rule:R4": 2,
+      "scout_rule:R3": 72
+     }
+    },
+    "C56": {
+     "cls": "unknown",
+     "points": 18.0,
+     "served": true,
+     "attempts": 19,
+     "outcomes": {
+      "accepted": 14,
+      "time_cap": 2,
+      "scout_rule:R4": 3
+     },
+     "rules": {
+      "scout_rule:R8": 19,
+      "scout_rule:R4": 20,
+      "scout_rule:R3": 10,
+      "scout_rule:R1": 4
+     }
+    },
+    "C57": {
+     "cls": "unknown",
+     "points": 23.0,
+     "served": true,
+     "attempts": 24,
+     "outcomes": {
+      "time_cap": 3,
+      "scout_route": 10,
+      "accepted": 7,
+      "scout_rule:R1": 2,
+      "scout_rule:R3": 2
+     },
+     "rules": {
+      "scout_rule:R8": 15,
+      "scout_rule:R1": 43,
+      "scout_rule:R3": 12,
+      "scout_rule:R4": 4
+     }
+    },
+    "C58": {
+     "cls": "unknown",
+     "points": 27.0,
+     "served": true,
+     "attempts": 18,
+     "outcomes": {
+      "accepted": 10,
+      "time_cap": 3,
+      "scout_rule:R3": 5
+     },
+     "rules": {
+      "scout_rule:R4": 6,
+      "scout_rule:R3": 131,
+      "scout_rule:R8": 10
+     }
+    },
+    "C59": {
+     "cls": "unknown",
+     "points": 15.0,
+     "served": true,
+     "attempts": 22,
+     "outcomes": {
+      "scout_rule:R1": 14,
+      "time_cap": 2,
+      "accepted": 6
+     },
+     "rules": {
+      "scout_rule:R1": 500,
+      "scout_rule:R8": 11
+     }
+    },
+    "C60": {
+     "cls": "unknown",
+     "points": 16.0,
+     "served": false,
+     "attempts": 27,
+     "outcomes": {
+      "scout_route": 25,
+      "time_cap": 2
+     },
+     "rules": {},
+     "reason": "scout_route"
+    },
+    "C61": {
+     "cls": "unknown",
+     "points": 27.0,
+     "served": false,
+     "attempts": 28,
+     "outcomes": {
+      "scout_rule:R1": 27,
+      "time_cap": 1
+     },
+     "rules": {
+      "scout_rule:R1": 938,
+      "scout_rule:R3": 46
+     },
+     "reason": "scout_rule:R1"
+    },
+    "C62": {
+     "cls": "unknown",
+     "points": 19.0,
+     "served": true,
+     "attempts": 21,
+     "outcomes": {
+      "scout_route": 10,
+      "time_cap": 3,
+      "scout_rule:R8": 4,
+      "accepted": 4
+     },
+     "rules": {
+      "scout_rule:R8": 93,
+      "scout_rule:R4": 10,
+      "scout_rule:R1": 14
+     }
+    },
+    "C63": {
+     "cls": "unknown",
+     "points": 10.0,
+     "served": false,
+     "attempts": 18,
+     "outcomes": {
+      "scout_route": 18
+     },
+     "rules": {},
+     "reason": "scout_route"
+    },
+    "C64": {
+     "cls": "unknown",
+     "points": 14.0,
+     "served": true,
+     "attempts": 19,
+     "outcomes": {
+      "accepted": 18,
+      "time_cap": 1
+     },
+     "rules": {
+      "scout_rule:R8": 57,
+      "scout_rule:R4": 19,
+      "scout_rule:R1": 72,
+      "scout_rule:R3": 216
+     }
+    },
+    "C65": {
+     "cls": "unknown",
+     "points": 29.0,
+     "served": false,
+     "attempts": 25,
+     "outcomes": {
+      "scout_rule:R1": 23,
+      "time_cap": 2
+     },
+     "rules": {
+      "scout_rule:R1": 636
+     },
+     "reason": "scout_rule:R1"
+    },
+    "C66": {
+     "cls": "unknown",
+     "points": 16.0,
+     "served": true,
+     "attempts": 32,
+     "outcomes": {
+      "scout_route": 10,
+      "accepted": 12,
+      "scout_rule:R4": 3,
+      "scout_rule:R1": 7
+     },
+     "rules": {
+      "scout_rule:R4": 477,
+      "scout_rule:R1": 136
+     }
+    },
+    "C67": {
+     "cls": "unknown",
+     "points": 13.0,
+     "served": true,
+     "attempts": 28,
+     "outcomes": {
+      "scout_route": 6,
+      "scout_rule:R8": 4,
+      "time_cap": 4,
+      "scout_rule:R4": 2,
+      "scout_rule:R3": 7,
+      "scout_rule:R1": 1,
+      "accepted": 4
+     },
+     "rules": {
+      "scout_rule:R8": 105,
+      "scout_rule:R4": 20,
+      "scout_rule:R3": 183,
+      "scout_rule:R1": 47
+     }
+    },
+    "C68": {
+     "cls": "unknown",
+     "points": 10.0,
+     "served": false,
+     "attempts": 24,
+     "outcomes": {
+      "scout_route": 23,
+      "time_cap": 1
+     },
+     "rules": {},
+     "reason": "scout_route"
+    },
+    "C69": {
+     "cls": "unknown",
+     "points": 23.0,
+     "served": true,
+     "attempts": 19,
+     "outcomes": {
+      "accepted": 18,
+      "time_cap": 1
+     },
+     "rules": {
+      "scout_rule:R8": 62,
+      "scout_rule:R4": 5
+     }
+    },
+    "C70": {
+     "cls": "unknown",
+     "points": 30.0,
+     "served": false,
+     "attempts": 28,
+     "outcomes": {
+      "scout_route": 27,
+      "time_cap": 1
+     },
+     "rules": {},
+     "reason": "scout_route"
+    }
+   }
+  },
+  "baseline": {
+   "status": "ok",
+   "score": 590.3423652831627,
+   "seconds": 2.7030000000013388,
+   "served": [
+    "C06",
+    "C10",
+    "C17",
+    "C18",
+    "C27",
+    "C30",
+    "C35",
+    "C39",
+    "C41",
+    "C48",
+    "C55",
+    "C56"
+   ],
+   "note": "",
+   "returncode": 0
+  },
+  "search": {
+   "status": "ok",
+   "score": 1000.958834995572,
+   "seconds": 5.155999999995402,
+   "served": [
+    "C06",
+    "C07",
+    "C12",
+    "C17",
+    "C18",
+    "C23",
+    "C24",
+    "C25",
+    "C27",
+    "C30",
+    "C35",
+    "C36",
+    "C39",
+    "C41",
+    "C43",
+    "C48",
+    "C49",
+    "C52",
+    "C53",
+    "C55",
+    "C56",
+    "C57",
+    "C58",
+    "C59",
+    "C62",
+    "C64",
+    "C66",
+    "C67",
+    "C69"
+   ],
+   "note": "",
+   "returncode": 0
+  },
+  "baseline_score": 590.3423652831627,
+  "baseline_seconds": 2.7030000000013388,
+  "search_score": 1000.958834995572,
+  "search_seconds": 5.155999999995402,
+  "improvement": 410.6164697124093,
+  "served": [
+   "C06",
+   "C07",
+   "C12",
+   "C17",
+   "C18",
+   "C23",
+   "C24",
+   "C25",
+   "C27",
+   "C30",
+   "C35",
+   "C36",
+   "C39",
+   "C41",
+   "C43",
+   "C48",
+   "C49",
+   "C52",
+   "C53",
+   "C55",
+   "C56",
+   "C57",
+   "C58",
+   "C59",
+   "C62",
+   "C64",
+   "C66",
+   "C67",
+   "C69"
+  ]
+ }
+]
