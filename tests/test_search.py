@@ -444,18 +444,5 @@ class LnsTests(unittest.TestCase):
                     self.assertNotEqual(set(report['weights'].values()), {1.0})
 
 
-class AlnsTests(unittest.TestCase):
-    def test_alns_skips_lns_and_exports_valid_plans(self):
-        from alns import AlnsSearch
-        sc = Scenario.from_dict(generate('L2', 3))
-        search = AlnsSearch(sc, 3.0)
-        verified = search.run()
-        self.assertEqual(search.lns['iterations'], 0)
-        self.assertGreater(search.alns_stats['iterations'], 0)
-        for state, result in verified:
-            self.assertTrue(evaluate(sc, state.plan(sc.seed)).valid)
-            self.assertAlmostEqual(result.score, state.score, places=6)
-
-
 if __name__ == '__main__':
     unittest.main()

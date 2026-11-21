@@ -126,6 +126,8 @@ The repair pass and LNS were merged with the upstream opt-in `--alns` phase, the
 
 Every plan was valid and the slowest run took 55.25 seconds. L4-2 scored 665.14 in the first batch and 562.88 after the rebase, so single L4 cases vary by up to about 15% between runs.
 
+A second head-to-head at 45 s with one worker per planner (L1–L4, seeds 15–17, two planners at the same time) gave LNS 5623.67 and `--alns` 5435.37: LNS won all three L4 cases (2883.93 vs 2680.64) and the two tied on L1–L3. The `--alns` option was then removed, so LNS is the only improvement phase.
+
 ### Mixing the search strategies
 
 Three variants were compared with the LNS described above (which then always restarted from the best plan):
@@ -225,7 +227,7 @@ A generated L2-7 demo is available locally at `output/search/tree.html`, with it
 
 ## Hand-in
 
-Copy `planner.py`, `search_planner.py`, `candidate_matrix.py`, `tree_view.py` and `alns.py` (used only with `--alns`) together. The official runner supplies `fleetkit` via `PYTHONPATH`. Local runs discover the bundled kit; `FLEETKIT_DIR` can explicitly select another copy. No third-party packages are required, and no changes to the official kit are needed.
+Copy `planner.py`, `search_planner.py`, `candidate_matrix.py` and `tree_view.py` together. The official runner supplies `fleetkit` via `PYTHONPATH`. Local runs discover the bundled kit; `FLEETKIT_DIR` can explicitly select another copy. No third-party packages are required, and no changes to the official kit are needed.
 
 The original analysis and isolated-mission checker remain in [analysis/](analysis/README.md).
 
