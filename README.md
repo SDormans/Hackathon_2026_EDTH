@@ -303,3 +303,30 @@ without diagnostics are counted as cases without detail, never as zero failures.
 Repeated cases across runs count as repeated observations; use `--history` to select
 a separate collection for a controlled comparison. Primary reasons summarise the
 search attempts, not proof that a contact is physically impossible to serve.
+
+## Link-loss policy (optional second part)
+
+`policy.py` is the per-aircraft policy for the organisers' link-loss challenge (`LINKLOSS.md` in the official kit). It is scored separately from the planner and is handed in next to `planner.py`.
+
+- **Reclassified target:** an effector senses its target within 300 m, before reaching it, and turns back.
+- **Pop-up zone:** every move is checked against the zones an aircraft knows; it never enters one, including when turning back.
+- **Confirm before engage (R4):** an effector engages only when it knows the observation ended at least 11.5 s earlier. Observations finished before the cut come from the plan; later ones come from the scout's message, which carries the end time. Otherwise it waits short of the target, then turns back.
+- **Separation (R8):** each aircraft predicts its peers from the plan and from their announced (route time, rate), with ±1.5 s for stale messages and drones about to take off, and picks the move that keeps at least 55 m.
+- **Messages:** only rate changes (repeated, then refreshed every 8 s while off schedule) and scout observation notices.
+
+Run the official check (with the updated official kit on `PYTHONPATH`):
+
+```sh
+python3 handin/check_policy.py --policy /path/to/policy.py --levels L1,L2,L3,L4 --seeds 0-1
+```
+
+Leaderboard setting (1000 m, 200 B/s), greedy plans, 40 unseen scenarios (L1–L4, seeds 20–29, 2 communication seeds each):
+
+| Policy | S_loss | Retention | Failed runs |
+|---|---:|---:|---:|
+| hold | 0.361 | 0.361 | 4/80 |
+| return | 0.366 | 0.366 | 2/80 |
+| broadcast | 0.292 | 0.412 | 47/80 |
+| **policy.py** | **0.799** | **0.817** | **9/80** |
+
+About 9 messages per aircraft per minute and under 0.2 ms per call. The remaining failures are all separation (R8) between aircraft that leave the plan close together, mostly on L4.
