@@ -731,6 +731,28 @@ class CacheTests(unittest.TestCase):
         self.assertGreater(seen['checked'], 100)
         self.assertGreater(seen['rejected'], 10)
 
+
+class DiverseBeamTests(unittest.TestCase):
+    @staticmethod
+    def state(score, used, served):
+        return search_planner.State({}, {}, frozenset(used), {}, {}, {}, frozenset(served), score)
+
+    def test_keeps_top_and_adds_unrepresented_used_sets(self):
+        ranked = [self.state(10, 'a', 'x'), self.state(9, 'a', 'y'), self.state(8, 'a', 'y'),
+                  self.state(7, 'b', 'z'), self.state(6, 'a', 'w'), self.state(5, 'c', 'x')]
+        beam = search_planner.diverse_beam(ranked, 2, diverse=2, extra=True)
+        self.assertEqual([s.score for s in beam], [10, 9, 7, 5])
+        beam = search_planner.diverse_beam(ranked, 2, diverse=3, extra=True)
+        # Third slot: no new used set left, first unrepresented served set.
+        self.assertEqual([s.score for s in beam], [10, 9, 7, 6, 5])
+
+    def test_replace_mode_keeps_width(self):
+        ranked = [self.state(10 - i, 'a', 'x') for i in range(5)] + [self.state(1, 'b', 'x')]
+        beam = search_planner.diverse_beam(ranked, 4, diverse=2, extra=False)
+        self.assertEqual([s.score for s in beam], [10, 9, 8, 1])
+        self.assertEqual(len(search_planner.diverse_beam(ranked[:5], 4, diverse=2, extra=False)), 4)
+        self.assertEqual(len(search_planner.diverse_beam(ranked[:2], 4, diverse=2)), 2)
+
 if __name__ == '__main__':
     unittest.main()
 

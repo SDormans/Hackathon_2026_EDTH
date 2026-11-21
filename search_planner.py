@@ -37,6 +37,8 @@ DESTROY_OPERATORS = ("random", "related", "worst", "tour", "trip", "group")
 
 
 # Scout candidate generation.
+BEAM_DIVERSE = 3        # beam slots kept for states with an unrepresented used/served set
+BEAM_DIVERSE_EXTRA = True  # diverse slots come on top of the width (else they replace its tail)
 SCOUT_FANOUT = 4        # scouts tried first for a contact
 SCOUT_FALLBACK = 8      # scouts tried when none of the first SCOUT_FANOUT gives a valid child
 FULL_INSERT_TASKS = 4   # tours up to this long try every insertion position, not only 3
@@ -895,6 +897,32 @@ def best_disjoint(lists, floor=-math.inf, nodes=GROUP_NODES):
     return None if best[1] is None else (best[0], best[1])
 
 
+def diverse_beam(ranked, width, diverse=BEAM_DIVERSE, extra=BEAM_DIVERSE_EXTRA):
+    """Best states by score plus up to `diverse` lower-ranked states whose consumed aircraft
+    (used set), then served set, is not yet represented in the kept beam."""
+    top = width if extra else max(1, width - diverse)
+    beam, rest = ranked[:top], ranked[top:]
+    used = {state.used for state in beam}
+    served = {state.served for state in beam}
+    slots = diverse if extra else width - top
+    picked, ids = [], set()
+    for novel in (lambda st: st.used not in used, lambda st: st.served not in served):
+        for state in rest:
+            if len(picked) >= slots:
+                break
+            if id(state) in ids or not novel(state):
+                continue
+            picked.append(state)
+            ids.add(id(state))
+            used.add(state.used)
+            served.add(state.served)
+    if not extra:
+        # Unfilled diverse slots go back to the next states by score.
+        picked += [st for st in rest if id(st) not in ids][:slots - len(picked)]
+    picked.sort(key=lambda st: -st.score)
+    return beam + picked
+
+
 def insertion_positions(home, tasks, pos, limit):
     """Tour positions ordered by added horizontal distance (cheapest insertion first)."""
     points = [home[:2]] + [t["point"] for t in tasks] + [home[:2]]
@@ -1663,7 +1691,7 @@ class Search:
                 width = self.width
                 if self.widen and self.passes >= 4:
                     width = min(100, self.width + self.width // 2)
-                beam = list(unique.values())[:width]
+                beam = diverse_beam(list(unique.values()), width)
                 kept = {state.signature() for state in beam}
                 # Valid serving children cut by the beam width ("outranked" in the beam).
                 self.stats(contact.id)["beam_pruned"] += sum(
