@@ -1,0 +1,200 @@
+{
+ "settings": {
+  "seconds": 5.0,
+  "timeout": 60.0,
+  "workers": 1,
+  "cases": [
+   "L1:0",
+   "L2:7",
+   "L3:1",
+   "L4:0"
+  ],
+  "planner": "C:\\Users\\chris\\OneDrive\\Documents\\Richelle's OneDrive\\OneDrive\\Desktop\\EDTH\\Hackathon_2026_EDTH\\planner.py",
+  "started_utc": "2026-11-21T00:16:22.628281+00:00"
+ },
+ "complete": true,
+ "elapsed_seconds": 26.625,
+ "completed": 4,
+ "requested": 4,
+ "total": {
+  "cases": 4,
+  "compared": 4,
+  "baseline_score": 1444.2827439114621,
+  "search_score": 1730.6679253885172,
+  "improvement": 286.3851814770551,
+  "improvement_pct": 19.828886184810028,
+  "wins": 4,
+  "ties": 0,
+  "losses": 0,
+  "search_valid": 4,
+  "search_failures": 0,
+  "baseline_failures": 0,
+  "setup_failures": 0,
+  "search_timeouts": 0,
+  "baseline_timeouts": 0,
+  "median_search_seconds": 5.132999999999811,
+  "max_search_seconds": 5.171999999999571,
+  "total_baseline_seconds": 5.266000000000531,
+  "total_search_seconds": 20.562999999999192,
+  "passes": [
+   362,
+   95,
+   4,
+   1
+  ],
+  "unserved": {
+   "collateral_ban": 20,
+   "scout_route": 19,
+   "outranked": 10,
+   "scout_rule:R1": 5,
+   "no_team": 1,
+   "time_cap": 2
+  },
+  "unserved_points": {
+   "collateral_ban": 1447.0,
+   "scout_route": 1062.0,
+   "outranked": 524.0,
+   "scout_rule:R1": 208.0,
+   "no_team": 67.0,
+   "time_cap": 66.0
+  }
+ },
+ "levels": {
+  "L1": {
+   "cases": 1,
+   "compared": 1,
+   "baseline_score": 123.82345874134069,
+   "search_score": 130.8557661407687,
+   "improvement": 7.032307399428021,
+   "improvement_pct": 5.679301378681452,
+   "wins": 1,
+   "ties": 0,
+   "losses": 0,
+   "search_valid": 1,
+   "search_failures": 0,
+   "baseline_failures": 0,
+   "setup_failures": 0,
+   "search_timeouts": 0,
+   "baseline_timeouts": 0,
+   "median_search_seconds": 5.125,
+   "max_search_seconds": 5.125,
+   "total_baseline_seconds": 0.14100000000053114,
+   "total_search_seconds": 5.125,
+   "passes": [
+    362
+   ],
+   "unserved": {
+    "outranked": 1
+   },
+   "unserved_points": {
+    "outranked": 69.0
+   }
+  },
+  "L2": {
+   "cases": 1,
+   "compared": 1,
+   "baseline_score": 266.2345585040883,
+   "search_score": 276.7591561186302,
+   "improvement": 10.524597614541904,
+   "improvement_pct": 3.953129779123054,
+   "wins": 1,
+   "ties": 0,
+   "losses": 0,
+   "search_valid": 1,
+   "search_failures": 0,
+   "baseline_failures": 0,
+   "setup_failures": 0,
+   "search_timeouts": 0,
+   "baseline_timeouts": 0,
+   "median_search_seconds": 5.140999999999622,
+   "max_search_seconds": 5.140999999999622,
+   "total_baseline_seconds": 0.18800000000010186,
+   "total_search_seconds": 5.140999999999622,
+   "passes": [
+    95
+   ],
+   "unserved": {
+    "no_team": 1,
+    "collateral_ban": 1
+   },
+   "unserved_points": {
+    "no_team": 67.0,
+    "collateral_ban": 42.0
+   }
+  },
+  "L3": {
+   "cases": 1,
+   "compared": 1,
+   "baseline_score": 463.8823613828704,
+   "search_score": 476.6382339387501,
+   "improvement": 12.755872555879705,
+   "improvement_pct": 2.7498076274884498,
+   "wins": 1,
+   "ties": 0,
+   "losses": 0,
+   "search_valid": 1,
+   "search_failures": 0,
+   "baseline_failures": 0,
+   "setup_failures": 0,
+   "search_timeouts": 0,
+   "baseline_timeouts": 0,
+   "median_search_seconds": 5.125,
+   "max_search_seconds": 5.125,
+   "total_baseline_seconds": 1.3909999999996217,
+   "total_search_seconds": 5.125,
+   "passes": [
+    4
+   ],
+   "unserved": {
+    "collateral_ban": 2,
+    "outranked": 3,
+    "scout_route": 1,
+    "time_cap": 1
+   },
+   "unserved_points": {
+    "collateral_ban": 150.0,
+    "outranked": 104.0,
+    "scout_route": 61.0,
+    "time_cap": 47.0
+   }
+  },
+  "L4": {
+   "cases": 1,
+   "compared": 1,
+   "baseline_score": 590.3423652831627,
+   "search_score": 846.4147691903684,
+   "improvement": 256.0724039072056,
+   "improvement_pct": 43.37693158517911,
+   "wins": 1,
+   "ties": 0,
+   "losses": 0,
+   "search_valid": 1,
+   "search_failures": 0,
+   "baseline_failures": 0,
+   "setup_failures": 0,
+   "search_timeouts": 0,
+   "baseline_timeouts": 0,
+   "median_search_seconds": 5.171999999999571,
+   "max_search_seconds": 5.171999999999571,
+   "total_baseline_seconds": 3.5460000000002765,
+   "total_search_seconds": 5.171999999999571,
+   "passes": [
+    1
+   ],
+   "unserved": {
+    "collateral_ban": 17,
+    "scout_route": 18,
+    "outranked": 6,
+    "scout_rule:R1": 5,
+    "time_cap": 1
+   },
+   "unserved_points": {
+    "collateral_ban": 1255.0,
+    "scout_route": 1001.0,
+    "outranked": 351.0,
+    "scout_rule:R1": 208.0,
+    "time_cap": 19.0
+   }
+  }
+ }
+}
