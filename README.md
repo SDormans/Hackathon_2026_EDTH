@@ -104,7 +104,7 @@ Generation and the external scoring calls are outside each planner's measured ru
 
 ### Held-out batch, seeds 70–74, 45 s
 
-`python test_logger.py --workers 1 --seconds 45 --levels L1,L2,L3,L4 --seeds 70-74`: 20 cases not used for tuning (diagnosis used other seeds). Each candidate ran at the same time as a reference run of the previous commit; runs are in `history/20261121T*`. Every plan was valid in every run. The slowest full planner process took 45.9 s.
+`python test_logger.py --workers 1 --seconds 45 --levels L1,L2,L3,L4 --seeds 70-74`: 20 cases not used for tuning (diagnosis used other seeds). Each candidate ran at the same time as a reference run of the previous commit; run totals and per-case scores are in [history/2026-11-21-heldout-70-74.md](history/2026-11-21-heldout-70-74.md). Every plan was valid in every run. The slowest full planner process took 45.9 s.
 
 | Run | Total | L1 | L2 | L3 | L4 | vs reference |
 |---|---:|---:|---:|---:|---:|---:|
