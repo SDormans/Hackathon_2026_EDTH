@@ -34,8 +34,11 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("scenario")
     parser.add_argument("plan")
-    parser.add_argument("--seconds", type=float, default=55.0,
-                        help="search deadline including startup, capped at 55 seconds")
+    # 45 s leaves 15 s of the organisers' 60 s limit for a slower grading machine; going over
+    # scores 0 for the scenario. On our benchmarks 45 s vs 55 s costs little (LNS stops early on
+    # small scenarios anyway).
+    parser.add_argument("--seconds", type=float, default=45.0,
+                        help="search deadline including startup (default 45, capped at 55 seconds)")
     parser.add_argument("--top-n", type=int, default=5)
     parser.add_argument("--beam-width", type=int, default=6)
     parser.add_argument("--lns-share", type=float, default=0.4,
