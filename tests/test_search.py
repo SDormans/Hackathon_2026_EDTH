@@ -622,3 +622,92 @@ class CacheTests(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class TripTests(unittest.TestCase):
+    """Scout trip label search (LNS operator "trip")."""
+    @classmethod
+    def setUpClass(cls):
+        cls.sc = Scenario.from_dict(generate('L4', 9))
+        cls.search = Search(cls.sc, seconds=6.0, lns_share=0.0)
+        cls.best = cls.search.run()[0][0]
+        cls.search.checker.stop = time.monotonic() + 60.0
+
+    def scouts(self):
+        return [a for a in self.sc.aircraft if a.type == 'scout']
+
+    def test_trip_route_is_valid_within_battery_and_horizon(self):
+        s, checked = self.search, 0
+        for scout in self.scouts():
+            partial, _ = s.strip_scout(self.best, scout.id)
+            self.assertIsNotNone(partial)
+            others = {t['cid'] for sid, ts in self.best.tasks.items() if sid != scout.id for t in ts}
+            z = search_planner.SCOUT_LAYERS[0]
+            start = time.monotonic()
+            trips = s.scout_trips(partial, scout, partial.used, others | set(partial.served), z)
+            self.assertLess(time.monotonic() - start, 0.5)
+            if not trips or not trips[0][1]:
+                continue
+            value, order, wh, finishes = trips[0]
+            self.assertEqual(list(finishes), sorted(finishes))
+            tasks = [{'cid': c, 'point': search_planner.obs_point(self.sc, scout, s.contacts[c], 0.0, z),
+                      'window': s.contacts[c].window, 'cpos': s.contacts[c].pos} for c in order]
+            route = scout_tour(self.sc, scout, tasks, z)
+            self.assertIsNotNone(route, order)
+            self.assertLessEqual(route[-1]['t'], self.sc.horizon_s + 1e-6)
+            self.assertLessEqual(search_planner.raw_energy_wh(route, scout), scout.usable_wh + 1e-6)
+            alone = IncrementalValidator(self.sc, time.monotonic() + 60).extend(s.root, {scout.id: route})
+            self.assertIsNotNone(alone, order)
+            self.assertLessEqual(set(order) & {c.id for c in self.sc.contacts if c.cls == 'unknown'},
+                                 set(alone.served))
+            checked += 1
+        self.assertGreater(checked, 0)
+
+    def test_best_trip_is_no_worse_than_the_current_tour(self):
+        s = self.search
+        lam = self.sc.rules.lambda_e
+        for scout in self.scouts():
+            current = tuple(t['cid'] for t in self.best.tasks[scout.id])
+            partial, _ = s.strip_scout(self.best, scout.id)
+            others = {t['cid'] for sid, ts in self.best.tasks.items() if sid != scout.id for t in ts}
+            route = self.best.routes.get(scout.id)
+            z = max(w['z'] for w in route) if route else search_planner.SCOUT_LAYERS[0]
+            trips = s.scout_trips(partial, scout, partial.used, others | set(partial.served), z)
+            mine = [tr for tr in trips if set(tr[1]) == set(current)]
+            if current and mine:
+                self.assertGreaterEqual(trips[0][0], mine[0][0] - 1e-9)
+            # Value is net value minus scout energy: never above the sum of net values.
+            for value, order, wh, _ in trips:
+                self.assertLess(value, sum(s.matrix.priority(s.contacts[c]) if s.contacts[c].cls == 'unknown'
+                                           else s.contacts[c].points for c in order) + 1e-9)
+                self.assertGreater(wh, 0)
+
+    def test_trip_move_keeps_plans_valid(self):
+        s = self.search
+        rng = random.Random(3)
+        moved = 0
+        for _ in range(6):
+            got = s.trip_move(self.best, rng)
+            if got is None:
+                continue
+            partial, removed = got
+            moved += 1
+            result = evaluate(self.sc, partial.plan(self.sc.seed))
+            self.assertTrue(result.valid, [str(v) for v in result.violations][:3])
+            self.assertAlmostEqual(result.score, partial.score, places=6)
+        self.assertGreater(moved, 0)
+
+    def test_lns_with_trip_operator_exports_valid_plans(self):
+        sc = Scenario.from_dict(generate('L3', 4))
+        old = search_planner.TRIP_SHARE
+        search_planner.TRIP_SHARE = 0.6
+        try:
+            search = Search(sc, seconds=5.0, lns_share=0.6)
+            verified = search.run()
+        finally:
+            search_planner.TRIP_SHARE = old
+        self.assertGreater(search.lns['trip_tried'], 0)
+        self.assertIn('trip_improvements', search.report(verified)['lns'])
+        for state, result in verified:
+            self.assertTrue(evaluate(sc, state.plan(sc.seed)).valid)
+            self.assertAlmostEqual(result.score, state.score, places=6)
