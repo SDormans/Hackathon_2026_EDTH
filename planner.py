@@ -47,6 +47,12 @@ def main():
     parser.add_argument("--restarts", action=argparse.BooleanOptionalAction, default=True,
                         help="stuck LNS restarts from a random archived plan instead of the best "
                              "(default: on)")
+    parser.add_argument("--scout-speed", choices=("fast", "eco", "hybrid"), default="fast",
+                        help="scout cruise: fast = 0.98 v_h, eco = the kit's speed, "
+                             "hybrid = eco with a fast fallback (default: fast)")
+    parser.add_argument("--obs-stretch", action=argparse.BooleanOptionalAction, default=True,
+                        help="observe from as far as the 3D range allows at the scout's altitude "
+                             "(~125 m at 70 m) instead of the kit's 100 m (default: on)")
     parser.add_argument("--artifacts", type=Path,
                         help="optional directory for ranked plans, tree.json and interactive tree.html")
     args = parser.parse_args()
@@ -56,7 +62,8 @@ def main():
         parser.error("lns-share must be 0..1")
     scenario = Scenario.from_dict(load_json(args.scenario))
     search = Search(scenario, args.seconds, args.top_n, args.beam_width, START, args.lns_share,
-                    args.interleave, args.adaptive, args.restarts)
+                    args.interleave, args.adaptive, args.restarts,
+                    scout_speed=args.scout_speed, obs_stretch=args.obs_stretch)
     verified = search.run()
     # Required output is written before optional diagnostics.
     save_json(verified[0][0].plan(scenario.seed), args.plan)
