@@ -1,0 +1,449 @@
+{
+ "version": "1",
+ "seed": 72,
+ "level": "L2",
+ "horizon_s": 900.0,
+ "aircraft": [
+  {
+   "id": "S01",
+   "type": "scout",
+   "home": [
+    190.0,
+    190.0,
+    0.0
+   ],
+   "v_h_mps": 19.8,
+   "v_up_mps": 5.6,
+   "v_down_mps": 8.0,
+   "capacity_wh": 47.1,
+   "battery_pct": 98.0,
+   "power": {
+    "p0_w": 86.6,
+    "k_v": 0.28,
+    "e_climb_wh_per_m": 0.018
+   }
+  },
+  {
+   "id": "S02",
+   "type": "scout",
+   "home": [
+    210.0,
+    190.0,
+    0.0
+   ],
+   "v_h_mps": 16.2,
+   "v_up_mps": 5.0,
+   "v_down_mps": 6.8,
+   "capacity_wh": 38.5,
+   "battery_pct": 92.0,
+   "power": {
+    "p0_w": 66.7,
+    "k_v": 0.264,
+    "e_climb_wh_per_m": 0.029
+   }
+  },
+  {
+   "id": "S03",
+   "type": "scout",
+   "home": [
+    150.0,
+    170.0,
+    0.0
+   ],
+   "v_h_mps": 15.4,
+   "v_up_mps": 5.2,
+   "v_down_mps": 5.2,
+   "capacity_wh": 39.9,
+   "battery_pct": 71.0,
+   "power": {
+    "p0_w": 93.6,
+    "k_v": 0.254,
+    "e_climb_wh_per_m": 0.02
+   }
+  },
+  {
+   "id": "L01",
+   "type": "effector",
+   "home": [
+    190.0,
+    150.0,
+    0.0
+   ],
+   "v_h_mps": 32.7,
+   "v_up_mps": 8.8,
+   "v_down_mps": 15.5,
+   "capacity_wh": 42.6,
+   "battery_pct": 74.0,
+   "power": {
+    "p0_w": 118.1,
+    "k_v": 0.081,
+    "e_climb_wh_per_m": 0.015
+   },
+   "subtype": "light"
+  },
+  {
+   "id": "L02",
+   "type": "effector",
+   "home": [
+    170.0,
+    190.0,
+    0.0
+   ],
+   "v_h_mps": 33.7,
+   "v_up_mps": 12.1,
+   "v_down_mps": 16.1,
+   "capacity_wh": 53.0,
+   "battery_pct": 96.0,
+   "power": {
+    "p0_w": 85.3,
+    "k_v": 0.088,
+    "e_climb_wh_per_m": 0.015
+   },
+   "subtype": "light"
+  },
+  {
+   "id": "L03",
+   "type": "effector",
+   "home": [
+    210.0,
+    150.0,
+    0.0
+   ],
+   "v_h_mps": 28.8,
+   "v_up_mps": 13.1,
+   "v_down_mps": 18.8,
+   "capacity_wh": 50.7,
+   "battery_pct": 75.0,
+   "power": {
+    "p0_w": 106.7,
+    "k_v": 0.089,
+    "e_climb_wh_per_m": 0.019
+   },
+   "subtype": "light"
+  },
+  {
+   "id": "L04",
+   "type": "effector",
+   "home": [
+    170.0,
+    170.0,
+    0.0
+   ],
+   "v_h_mps": 32.8,
+   "v_up_mps": 14.0,
+   "v_down_mps": 15.9,
+   "capacity_wh": 50.1,
+   "battery_pct": 90.0,
+   "power": {
+    "p0_w": 92.1,
+    "k_v": 0.09,
+    "e_climb_wh_per_m": 0.018
+   },
+   "subtype": "light"
+  },
+  {
+   "id": "L05",
+   "type": "effector",
+   "home": [
+    150.0,
+    150.0,
+    0.0
+   ],
+   "v_h_mps": 29.5,
+   "v_up_mps": 9.7,
+   "v_down_mps": 18.8,
+   "capacity_wh": 44.0,
+   "battery_pct": 84.0,
+   "power": {
+    "p0_w": 98.4,
+    "k_v": 0.076,
+    "e_climb_wh_per_m": 0.013
+   },
+   "subtype": "light"
+  },
+  {
+   "id": "L06",
+   "type": "effector",
+   "home": [
+    170.0,
+    150.0,
+    0.0
+   ],
+   "v_h_mps": 31.6,
+   "v_up_mps": 9.1,
+   "v_down_mps": 17.6,
+   "capacity_wh": 42.4,
+   "battery_pct": 98.0,
+   "power": {
+    "p0_w": 97.0,
+    "k_v": 0.072,
+    "e_climb_wh_per_m": 0.013
+   },
+   "subtype": "light"
+  },
+  {
+   "id": "H01",
+   "type": "effector",
+   "home": [
+    150.0,
+    190.0,
+    0.0
+   ],
+   "v_h_mps": 22.5,
+   "v_up_mps": 7.0,
+   "v_down_mps": 10.1,
+   "capacity_wh": 55.9,
+   "battery_pct": 92.0,
+   "power": {
+    "p0_w": 122.8,
+    "k_v": 0.151,
+    "e_climb_wh_per_m": 0.034
+   },
+   "subtype": "heavy"
+  },
+  {
+   "id": "H02",
+   "type": "effector",
+   "home": [
+    190.0,
+    170.0,
+    0.0
+   ],
+   "v_h_mps": 21.3,
+   "v_up_mps": 7.5,
+   "v_down_mps": 10.6,
+   "capacity_wh": 74.7,
+   "battery_pct": 80.0,
+   "power": {
+    "p0_w": 141.5,
+    "k_v": 0.128,
+    "e_climb_wh_per_m": 0.032
+   },
+   "subtype": "heavy"
+  },
+  {
+   "id": "H03",
+   "type": "effector",
+   "home": [
+    210.0,
+    170.0,
+    0.0
+   ],
+   "v_h_mps": 23.9,
+   "v_up_mps": 6.6,
+   "v_down_mps": 12.7,
+   "capacity_wh": 73.6,
+   "battery_pct": 77.0,
+   "power": {
+    "p0_w": 155.5,
+    "k_v": 0.14,
+    "e_climb_wh_per_m": 0.037
+   },
+   "subtype": "heavy"
+  }
+ ],
+ "contacts": [
+  {
+   "id": "C01",
+   "class": "hostile",
+   "pos": [
+    2844.3,
+    639.9,
+    0.0
+   ],
+   "points": 46,
+   "engage_needs": {
+    "heavy": 2
+   },
+   "window_s": [
+    85.1,
+    373.8
+   ]
+  },
+  {
+   "id": "C02",
+   "class": "hostile",
+   "pos": [
+    3025.4,
+    558.9,
+    0.0
+   ],
+   "points": 45,
+   "engage_needs": {
+    "light": 1
+   },
+   "window_s": [
+    98.5,
+    411.7
+   ]
+  },
+  {
+   "id": "C03",
+   "class": "hostile",
+   "pos": [
+    2278.1,
+    2457.3,
+    0.0
+   ],
+   "points": 98,
+   "engage_needs": {
+    "light": 1
+   },
+   "window_s": [
+    35.4,
+    309.2
+   ]
+  },
+  {
+   "id": "C04",
+   "class": "hostile",
+   "pos": [
+    2821.4,
+    300.0,
+    0.0
+   ],
+   "points": 97,
+   "engage_needs": {
+    "light": 1
+   },
+   "window_s": [
+    185.9,
+    388.5
+   ]
+  },
+  {
+   "id": "C05",
+   "class": "hostile",
+   "pos": [
+    2939.1,
+    343.0,
+    0.0
+   ],
+   "points": 92,
+   "engage_needs": {
+    "light": 3
+   },
+   "window_s": [
+    398.1,
+    698.0
+   ]
+  },
+  {
+   "id": "C06",
+   "class": "hostile",
+   "pos": [
+    1662.1,
+    2569.8,
+    0.0
+   ],
+   "points": 80,
+   "engage_needs": {
+    "heavy": 1
+   },
+   "window_s": [
+    173.1,
+    409.2
+   ]
+  },
+  {
+   "id": "C07",
+   "class": "unknown",
+   "pos": [
+    846.3,
+    1385.4,
+    0.0
+   ],
+   "points": 10,
+   "window_s": [
+    171.9,
+    445.0
+   ]
+  },
+  {
+   "id": "C08",
+   "class": "unknown",
+   "pos": [
+    2507.2,
+    2012.7,
+    0.0
+   ],
+   "points": 29,
+   "window_s": [
+    349.0,
+    678.7
+   ]
+  },
+  {
+   "id": "C09",
+   "class": "unknown",
+   "pos": [
+    2993.8,
+    788.7,
+    0.0
+   ],
+   "points": 30,
+   "window_s": [
+    434.5,
+    765.3
+   ]
+  },
+  {
+   "id": "C10",
+   "class": "friendly",
+   "pos": [
+    2876.6,
+    2349.6,
+    0.0
+   ],
+   "window_s": null
+  },
+  {
+   "id": "C11",
+   "class": "civilian",
+   "pos": [
+    2552.9,
+    2335.6,
+    0.0
+   ],
+   "window_s": null
+  }
+ ],
+ "zones": [
+  {
+   "id": "Z01",
+   "center": [
+    964.6,
+    824.1
+   ],
+   "radius_m": 347.0,
+   "top_m": 117.0
+  },
+  {
+   "id": "Z02",
+   "center": [
+    2758.1,
+    1439.6
+   ],
+   "radius_m": 361.0,
+   "top_m": 96.0
+  }
+ ],
+ "rules": {
+  "z_min_m": 30.0,
+  "z_max_m": 150.0,
+  "R_obs_m": 150.0,
+  "obs_dwell_s": 20.0,
+  "confirm_margin_s": 10.0,
+  "protect_radius_m": 100.0,
+  "collateral_radius_m": 200.0,
+  "d_sep_m": 40.0,
+  "exempt_radius_m": 100.0,
+  "R_eng_m": 25.0,
+  "sync_window_s": 20.0,
+  "verify_window_s": 120.0,
+  "verify_bonus": 0.25,
+  "lambda_e": 0.5,
+  "c_eff": 10.0
+ },
+ "events": []
+}

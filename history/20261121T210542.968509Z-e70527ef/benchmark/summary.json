@@ -1,0 +1,450 @@
+{
+ "settings": {
+  "seconds": 45.0,
+  "timeout": 60.0,
+  "workers": 1,
+  "cases": [
+   "L1:70",
+   "L1:71",
+   "L1:72",
+   "L1:73",
+   "L1:74",
+   "L2:70",
+   "L2:71",
+   "L2:72",
+   "L2:73",
+   "L2:74",
+   "L3:70",
+   "L3:71",
+   "L3:72",
+   "L3:73",
+   "L3:74",
+   "L4:70",
+   "L4:71",
+   "L4:72",
+   "L4:73",
+   "L4:74"
+  ],
+  "planner": "/home/ubuntu/repos/Hackathon_2026_EDTH/planner.py",
+  "started_utc": "2026-11-21T21:05:43.056452+00:00"
+ },
+ "complete": true,
+ "elapsed_seconds": 534.3654516779998,
+ "completed": 20,
+ "requested": 20,
+ "total": {
+  "cases": 20,
+  "compared": 20,
+  "contact_summary": {
+   "cases_with_detail": 20,
+   "cases_without_detail": 0,
+   "by_class": {
+    "hostile": {
+     "contacts": 365,
+     "served": 209,
+     "unserved": 156,
+     "scout_failures": 3,
+     "reasons": {
+      "outranked": 28,
+      "collateral_ban": 81,
+      "no_team": 3,
+      "scout_window": 35,
+      "time_cap": 6,
+      "scout_rule:R3": 2,
+      "scout_rule:R1": 1
+     },
+     "unserved_points": {
+      "outranked": 1792.0,
+      "collateral_ban": 5544.0,
+      "no_team": 158.0,
+      "scout_window": 2436.0,
+      "time_cap": 288.0,
+      "scout_rule:R3": 85.0,
+      "scout_rule:R1": 40.0
+     },
+     "scout_failure_rate_pct": 0.821917808219178
+    },
+    "unknown": {
+     "contacts": 150,
+     "served": 133,
+     "unserved": 17,
+     "scout_failures": 0,
+     "reasons": {
+      "not_improving": 1,
+      "outranked": 6,
+      "scout_window": 10
+     },
+     "unserved_points": {
+      "not_improving": 12.0,
+      "outranked": 96.0,
+      "scout_window": 203.0
+     },
+     "scout_failure_rate_pct": 0.0
+    }
+   }
+  },
+  "baseline_score": 6187.906616896988,
+  "search_score": 10615.356344221294,
+  "improvement": 4427.449727324306,
+  "improvement_pct": 71.55004109523088,
+  "wins": 19,
+  "ties": 0,
+  "losses": 1,
+  "search_valid": 20,
+  "search_failures": 0,
+  "baseline_failures": 0,
+  "setup_failures": 0,
+  "search_timeouts": 0,
+  "baseline_timeouts": 0,
+  "median_search_seconds": 27.259557191000113,
+  "max_search_seconds": 45.67780302200026,
+  "total_baseline_seconds": 42.54638332899958,
+  "total_search_seconds": 488.14936967000176,
+  "passes": [
+   602,
+   978,
+   678,
+   549,
+   701,
+   159,
+   303,
+   84,
+   186,
+   159,
+   76,
+   60,
+   82,
+   65,
+   51,
+   15,
+   15,
+   14,
+   6,
+   14
+  ],
+  "unserved": {
+   "collateral_ban": 81,
+   "scout_window": 45,
+   "outranked": 34,
+   "time_cap": 6,
+   "no_team": 3,
+   "scout_rule:R3": 2,
+   "scout_rule:R1": 1,
+   "not_improving": 1
+  },
+  "unserved_points": {
+   "collateral_ban": 5544.0,
+   "scout_window": 2639.0,
+   "outranked": 1888.0,
+   "time_cap": 288.0,
+   "no_team": 158.0,
+   "scout_rule:R3": 85.0,
+   "scout_rule:R1": 40.0,
+   "not_improving": 12.0
+  }
+ },
+ "levels": {
+  "L1": {
+   "cases": 5,
+   "compared": 5,
+   "contact_summary": {
+    "cases_with_detail": 5,
+    "cases_without_detail": 0,
+    "by_class": {
+     "hostile": {
+      "contacts": 15,
+      "served": 7,
+      "unserved": 8,
+      "scout_failures": 0,
+      "reasons": {
+       "outranked": 6,
+       "collateral_ban": 1,
+       "no_team": 1
+      },
+      "unserved_points": {
+       "outranked": 402.0,
+       "collateral_ban": 89.0,
+       "no_team": 72.0
+      },
+      "scout_failure_rate_pct": 0.0
+     },
+     "unknown": {
+      "contacts": 5,
+      "served": 5,
+      "unserved": 0,
+      "scout_failures": 0,
+      "reasons": {},
+      "unserved_points": {},
+      "scout_failure_rate_pct": 0.0
+     }
+    }
+   },
+   "baseline_score": 449.4733720448133,
+   "search_score": 513.350018239354,
+   "improvement": 63.87664619454068,
+   "improvement_pct": 14.2114416931849,
+   "wins": 4,
+   "ties": 0,
+   "losses": 1,
+   "search_valid": 5,
+   "search_failures": 0,
+   "baseline_failures": 0,
+   "setup_failures": 0,
+   "search_timeouts": 0,
+   "baseline_timeouts": 0,
+   "median_search_seconds": 1.7693387640001674,
+   "max_search_seconds": 30.527703671999916,
+   "total_baseline_seconds": 0.4212882570000147,
+   "total_search_seconds": 37.85745319699981,
+   "passes": [
+    602,
+    978,
+    678,
+    549,
+    701
+   ],
+   "unserved": {
+    "outranked": 6,
+    "collateral_ban": 1,
+    "no_team": 1
+   },
+   "unserved_points": {
+    "outranked": 402.0,
+    "collateral_ban": 89.0,
+    "no_team": 72.0
+   }
+  },
+  "L2": {
+   "cases": 5,
+   "compared": 5,
+   "contact_summary": {
+    "cases_with_detail": 5,
+    "cases_without_detail": 0,
+    "by_class": {
+     "hostile": {
+      "contacts": 30,
+      "served": 22,
+      "unserved": 8,
+      "scout_failures": 0,
+      "reasons": {
+       "outranked": 3,
+       "collateral_ban": 5
+      },
+      "unserved_points": {
+       "outranked": 148.0,
+       "collateral_ban": 384.0
+      },
+      "scout_failure_rate_pct": 0.0
+     },
+     "unknown": {
+      "contacts": 15,
+      "served": 15,
+      "unserved": 0,
+      "scout_failures": 0,
+      "reasons": {},
+      "unserved_points": {},
+      "scout_failure_rate_pct": 0.0
+     }
+    }
+   },
+   "baseline_score": 1343.0614682697706,
+   "search_score": 1482.8969989237662,
+   "improvement": 139.83553065399565,
+   "improvement_pct": 10.411699982290605,
+   "wins": 5,
+   "ties": 0,
+   "losses": 0,
+   "search_valid": 5,
+   "search_failures": 0,
+   "baseline_failures": 0,
+   "setup_failures": 0,
+   "search_timeouts": 0,
+   "baseline_timeouts": 0,
+   "median_search_seconds": 5.078563008999481,
+   "max_search_seconds": 32.75723473100061,
+   "total_baseline_seconds": 1.5316375740003423,
+   "total_search_seconds": 52.57724576600049,
+   "passes": [
+    159,
+    303,
+    84,
+    186,
+    159
+   ],
+   "unserved": {
+    "collateral_ban": 5,
+    "outranked": 3
+   },
+   "unserved_points": {
+    "collateral_ban": 384.0,
+    "outranked": 148.0
+   }
+  },
+  "L3": {
+   "cases": 5,
+   "compared": 5,
+   "contact_summary": {
+    "cases_with_detail": 5,
+    "cases_without_detail": 0,
+    "by_class": {
+     "hostile": {
+      "contacts": 70,
+      "served": 55,
+      "unserved": 15,
+      "scout_failures": 0,
+      "reasons": {
+       "outranked": 6,
+       "collateral_ban": 8,
+       "no_team": 1
+      },
+      "unserved_points": {
+       "outranked": 373.0,
+       "collateral_ban": 498.0,
+       "no_team": 41.0
+      },
+      "scout_failure_rate_pct": 0.0
+     },
+     "unknown": {
+      "contacts": 30,
+      "served": 30,
+      "unserved": 0,
+      "scout_failures": 0,
+      "reasons": {},
+      "unserved_points": {},
+      "scout_failure_rate_pct": 0.0
+     }
+    }
+   },
+   "baseline_score": 1974.4323864743772,
+   "search_score": 2864.009884109667,
+   "improvement": 889.5774976352898,
+   "improvement_pct": 45.054847343937354,
+   "wins": 5,
+   "ties": 0,
+   "losses": 0,
+   "search_valid": 5,
+   "search_failures": 0,
+   "baseline_failures": 0,
+   "setup_failures": 0,
+   "search_timeouts": 0,
+   "baseline_timeouts": 0,
+   "median_search_seconds": 27.867018977000043,
+   "max_search_seconds": 45.443559149000066,
+   "total_baseline_seconds": 7.6529606109997985,
+   "total_search_seconds": 170.09165901800043,
+   "passes": [
+    76,
+    60,
+    82,
+    65,
+    51
+   ],
+   "unserved": {
+    "collateral_ban": 8,
+    "outranked": 6,
+    "no_team": 1
+   },
+   "unserved_points": {
+    "collateral_ban": 498.0,
+    "outranked": 373.0,
+    "no_team": 41.0
+   }
+  },
+  "L4": {
+   "cases": 5,
+   "compared": 5,
+   "contact_summary": {
+    "cases_with_detail": 5,
+    "cases_without_detail": 0,
+    "by_class": {
+     "hostile": {
+      "contacts": 250,
+      "served": 125,
+      "unserved": 125,
+      "scout_failures": 3,
+      "reasons": {
+       "scout_window": 35,
+       "collateral_ban": 67,
+       "outranked": 13,
+       "time_cap": 6,
+       "scout_rule:R3": 2,
+       "no_team": 1,
+       "scout_rule:R1": 1
+      },
+      "unserved_points": {
+       "scout_window": 2436.0,
+       "collateral_ban": 4573.0,
+       "outranked": 869.0,
+       "time_cap": 288.0,
+       "scout_rule:R3": 85.0,
+       "no_team": 45.0,
+       "scout_rule:R1": 40.0
+      },
+      "scout_failure_rate_pct": 1.2
+     },
+     "unknown": {
+      "contacts": 100,
+      "served": 83,
+      "unserved": 17,
+      "scout_failures": 0,
+      "reasons": {
+       "not_improving": 1,
+       "outranked": 6,
+       "scout_window": 10
+      },
+      "unserved_points": {
+       "not_improving": 12.0,
+       "outranked": 96.0,
+       "scout_window": 203.0
+      },
+      "scout_failure_rate_pct": 0.0
+     }
+    }
+   },
+   "baseline_score": 2420.9393901080275,
+   "search_score": 5755.099442948507,
+   "improvement": 3334.1600528404797,
+   "improvement_pct": 137.7217482793612,
+   "wins": 5,
+   "ties": 0,
+   "losses": 0,
+   "search_valid": 5,
+   "search_failures": 0,
+   "baseline_failures": 0,
+   "setup_failures": 0,
+   "search_timeouts": 0,
+   "baseline_timeouts": 0,
+   "median_search_seconds": 45.543897303999984,
+   "max_search_seconds": 45.67780302200026,
+   "total_baseline_seconds": 32.940496886999426,
+   "total_search_seconds": 227.62301168900103,
+   "passes": [
+    15,
+    15,
+    14,
+    6,
+    14
+   ],
+   "unserved": {
+    "collateral_ban": 67,
+    "scout_window": 45,
+    "outranked": 19,
+    "time_cap": 6,
+    "scout_rule:R3": 2,
+    "no_team": 1,
+    "scout_rule:R1": 1,
+    "not_improving": 1
+   },
+   "unserved_points": {
+    "collateral_ban": 4573.0,
+    "scout_window": 2639.0,
+    "outranked": 965.0,
+    "time_cap": 288.0,
+    "scout_rule:R3": 85.0,
+    "no_team": 45.0,
+    "scout_rule:R1": 40.0,
+    "not_improving": 12.0
+   }
+  }
+ }
+}
