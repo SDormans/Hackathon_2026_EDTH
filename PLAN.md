@@ -10,6 +10,7 @@ Safety comes before cleverness.
 - Greedy baseline on the 8 validation scenarios: **2664.5** total
 - Our search planner: *(to be measured)*
 - In L4 the baseline wins about 1,000 of about 3,700 available points and uses only 5 of 15 scouts.
+- Phase 2 beam (held-out L1–L4 seeds 30–45, 45 s, one worker): **35151.40** vs 34900.15 before (35044.05 for the same base code in the scout-tour phase run). All 64 plans valid, slowest run 45.9 s. Kept: diversity slots and beam width 9. Dropped: bound ranking and non-improving children ([README](README.md#phase-2-beam-changes-held-out-seeds-3045-45-s)).
 
 ## What we found
 - **Takeoff collisions.** All aircraft sit on pads ~11 m apart, but separation (R8) needs 40 m.
@@ -26,6 +27,7 @@ Safety comes before cleverness.
 | 2 | Takeoff scheduling: own takeoff time, heading and altitude per aircraft | Fix R8 at the base; likely the biggest gain | Daaksh | done: pad-aware takeoffs (`PAD_TAKEOFFS`). Remaining R8 is mostly en route; per-member takeoff slots, layer pairs and wider spacing all lost (README) |
 | 3 | Scouts: plan unknown contacts, insert each new visit at its best position in the tour | 10 of 15 scouts idle in L4 | ? | done: insertion in beam children and LNS, 8-scout fallback. 6 first scouts and extra departure shifts lost. Scout-tour phase: cheapest-insertion beam expansion and slack-ranked fanout 6/10 won on tuning but lost on held-out seeds 30–45 (−83.69), shared observation points lost; all reverted (README). Only 3 L4 scout-rule failures remain; most misses are `scout_window` and `outranked` |
 | 4 | Polish: swap/drop moves after the search, wait on the ground instead of hovering, fly at best-range speed | Small gains everywhere | ? | open: effectors already back-timed (no hover), scouts stretch legs instead of hovering, cruise at 0.995 v_h. Relocation/2-opt polish of scout orders lost (−48.19 on tuning seeds) and was reverted |
+| 5 | Beam: keep diverse states, rank by optimistic bound, allow cheaper non-improving children, sweep width | `outranked` contacts: valid serves cut by the beam | Devin | done: `BEAM_DIVERSE = 3` and width 9 kept (+251 held-out); bound ranking and relaxed children lost or never fired (README) |
 
 ## How we accept a change
 1. Run the benchmark on the 8 validation scenarios **and** random new seeds.

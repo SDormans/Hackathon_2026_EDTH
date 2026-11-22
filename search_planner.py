@@ -37,6 +37,8 @@ DESTROY_OPERATORS = ("random", "related", "worst", "tour", "trip", "group")
 
 
 # Scout candidate generation.
+BEAM_DIVERSE = 3        # beam slots kept for states with an unrepresented used/served set
+BEAM_DIVERSE_EXTRA = False  # diverse slots come on top of the width (else they replace its tail)
 SCOUT_FANOUT = 4        # scouts tried first for a contact
 SCOUT_FALLBACK = 8      # scouts tried when none of the first SCOUT_FANOUT gives a valid child
 FULL_INSERT_TASKS = 4   # tours up to this long try every insertion position, not only 3
@@ -895,6 +897,32 @@ def best_disjoint(lists, floor=-math.inf, nodes=GROUP_NODES):
     return None if best[1] is None else (best[0], best[1])
 
 
+def diverse_beam(ranked, width, diverse=BEAM_DIVERSE, extra=BEAM_DIVERSE_EXTRA):
+    """Best states by score plus up to `diverse` lower-ranked states whose consumed aircraft
+    (used set), then served set, is not yet represented in the kept beam."""
+    top = width if extra else max(1, width - diverse)
+    beam, rest = ranked[:top], ranked[top:]
+    used = {state.used for state in beam}
+    served = {state.served for state in beam}
+    slots = diverse if extra else width - top
+    picked, ids = [], set()
+    for novel in (lambda st: st.used not in used, lambda st: st.served not in served):
+        for state in rest:
+            if len(picked) >= slots:
+                break
+            if id(state) in ids or not novel(state):
+                continue
+            picked.append(state)
+            ids.add(id(state))
+            used.add(state.used)
+            served.add(state.served)
+    if not extra:
+        # Unfilled diverse slots go back to the next states by score.
+        picked += [st for st in rest if id(st) not in ids][:slots - len(picked)]
+    picked.sort(key=lambda st: -st.score)
+    return beam + picked
+
+
 def insertion_positions(home, tasks, pos, limit):
     """Tour positions ordered by added horizontal distance (cheapest insertion first)."""
     points = [home[:2]] + [t["point"] for t in tasks] + [home[:2]]
@@ -1250,7 +1278,7 @@ class WarmPlanner(_Planner):
 
 
 class Search:
-    def __init__(self, scenario, seconds=45.0, top_n=5, beam_width=6, start=None, lns_share=0.4,
+    def __init__(self, scenario, seconds=45.0, top_n=5, beam_width=9, start=None, lns_share=0.4,
                  interleave=False, adaptive=False, restarts=True, widen=False,
                  scout_speed="fast", obs_stretch=True):
         if seconds < 0 or not 1 <= top_n <= 100 or not 1 <= beam_width <= 100:
@@ -1306,7 +1334,8 @@ class Search:
 
     def stats(self, cid):
         if cid not in self.attempts:
-            self.attempts[cid] = {"attempts": 0, "warm_accepted": 0, "outcomes": {}, "rules": {}}
+            self.attempts[cid] = {"attempts": 0, "warm_accepted": 0, "outcomes": {}, "rules": {},
+                                  "beam_pruned": 0}
         return self.attempts[cid]
 
     def record(self, state, parent, decision, depth):
@@ -1642,7 +1671,7 @@ class Search:
             beam = [self.root]
             for depth, contact in enumerate(order, 1):
                 self.checker.check_time()
-                next_beam = []
+                next_beam, served = [], []
                 for parent in beam:
                     self.checker.check_time()
                     skipped = self.record(parent, parent, {"kind": "skip", "contact": contact.id}, depth)
@@ -1652,7 +1681,8 @@ class Search:
                     local_stop = min(self.checker.stop, time.monotonic()+allowance)
                     try:
                         for child, decision in self.children(parent, contact, local_stop):
-                            next_beam.append(self.record(child, parent, decision, depth))
+                            served.append(self.record(child, parent, decision, depth))
+                            next_beam.append(served[-1])
                     except DeadlineReached:
                         self.checker.check_time()  # Local cap expires without ending search.
                 unique = {}
@@ -1661,7 +1691,11 @@ class Search:
                 width = self.width
                 if self.widen and self.passes >= 4:
                     width = min(100, self.width + self.width // 2)
-                beam = list(unique.values())[:width]
+                beam = diverse_beam(list(unique.values()), width)
+                kept = {state.signature() for state in beam}
+                # Valid serving children cut by the beam width ("outranked" in the beam).
+                self.stats(contact.id)["beam_pruned"] += sum(
+                    1 for state in served if state.signature() not in kept)
             self.passes += 1
             if self.interleave and self.lns_share < 1:
                 burst = (time.monotonic() - pass_start) * self.lns_share / (1 - self.lns_share)
@@ -2242,6 +2276,7 @@ class Search:
             entry = {"cls": c.cls, "points": c.points, "served": c.id in served,
                      "attempts": stats["attempts"] if stats else 0,
                      "outcomes": dict(stats["outcomes"]) if stats else {},
+                     "beam_pruned": stats.get("beam_pruned", 0) if stats else 0,
                      "rules": dict(stats["rules"]) if stats else {}}
             if c.id not in served:
                 reason = unserved_reason(c, banned, stats)
