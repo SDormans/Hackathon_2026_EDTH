@@ -695,7 +695,8 @@ class Policy:
                 if reach is None:
                     continue
             elif (YIELD_OFF_PLAN and not trusted and not nominal and aid > self.id and aid in self.peer_state
-                    and t - self.peer_state[aid][2] <= YIELD_FRESH_S and not self._peer_on_plan(aid, t)):
+                    and t - self.peer_state[aid][2] <= YIELD_FRESH_S and self.peer_state[aid][1] == 0.0
+                    and not self._peer_on_plan(aid, t)):
                 # a later-id off-schedule peer heard just now gives way to me: only where it may be now counts
                 reach = self._peer_reach(aid, t, 0.0)
                 if reach is None:
