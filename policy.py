@@ -92,6 +92,7 @@ CONFIRM_SLACK_S = 0.1
 SAFE_STEP = True        # every move must keep d_sep + STEP_MARGIN_M from every peer's reachable positions this step
 STEP_MARGIN_M = 5.0
 BLOCK_MARGIN_M = 5.0    # margin when predicting that an on-schedule peer must stop
+YIELD_OFF_PLAN = True    # between off-schedule aircraft the later id keeps clear of any move of the earlier
 BEACON_S = 2.0          # off schedule with no peer believed near: re-announce this often
 FORMATION_M = 120.0     # an on-schedule peer this close that must stop is expected to stop where it is
 REVERSE_LOOK_S = 8.0    # a reversal must keep clear of on-schedule peers' next seconds
@@ -570,6 +571,14 @@ class Policy:
             c, k = tau0 + rate * (t - t0), min(max(0.0, t - t0 - 1.0), STALE_CAP_S) + 0.1
         return _polyline(clock, c - k - step, c + k + step)
 
+    def _peer_any(self, aid, t):
+        """Planned positions an off-schedule peer can occupy during [t, t + 1] whatever it decided since
+        its last announcement (it may have changed its mind and the news been lost)."""
+        tau0, rate, t0 = self.peer_state[aid]
+        c = tau0 + rate * max(0.0, t - t0 - STALE_CAP_S)
+        k = min(max(0.0, t - t0), STALE_CAP_S) + 1.1
+        return _polyline(self.peers[aid][0], c - k, c + k)
+
     def _peer_nominal(self, aid, t):
         """Planned positions a peer occupies during [t, t + 1] if it keeps its announced state."""
         clock = self.peers[aid][0]
@@ -642,6 +651,12 @@ class Policy:
                 # on schedule has the right of way: an off-plan peer checks its own moves against mine,
                 # so only where it may be now counts
                 reach = self._peer_reach(aid, t, 0.0)
+                if reach is None:
+                    continue
+            if (YIELD_OFF_PLAN and not trusted and not hold_on_plan and not nominal and aid < self.id
+                    and aid in self.peer_state and not self._peer_on_plan(aid, t)):
+                # two off-schedule aircraft: the later id gives way to whatever the earlier one may do
+                reach = self._peer_any(aid, t)
                 if reach is None:
                     continue
             tgt = self.peers[aid][1]
