@@ -122,7 +122,17 @@ class SafetyNetTests(unittest.TestCase):
             """, self.scenario, plan)
             self.assertLess(time.monotonic() - started, 15)
             self.assert_empty_valid(proc, plan)
-            self.assertFalse(plan.with_name(plan.name + ".tmp").exists())
+            self.assertEqual(list(Path(tmp).glob("*.tmp")), [])
+
+    def test_watchdog_write_does_not_wait_for_a_stalled_write(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            plan = Path(tmp) / "plan.json"
+            writer = planner.PlanWriter(plan, 7)
+            writer.lock.acquire()  # a main-thread write that never finishes
+            started = time.monotonic()
+            self.assertTrue(writer.write_empty(wait=0.2))
+            self.assertLess(time.monotonic() - started, 2)
+            self.assertEqual(load_json(plan), {"seed": 7, "routes": []})
 
     def test_phase_error_keeps_best_archived_plan(self):
         sc = Scenario.from_dict(load_json(self.scenario))

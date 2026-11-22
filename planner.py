@@ -45,24 +45,30 @@ class PlanWriter:
         self.lock = threading.Lock()
         self.done = False
 
-    def write(self, plan):
-        with self.lock:
+    def write(self, plan, wait=-1):
+        # After `wait` seconds the watchdog writes without the lock, so a stalled main-thread
+        # write cannot hold it past the limit. Each thread writes its own temporary file.
+        locked = self.lock.acquire(timeout=wait)
+        try:
             if self.done:
                 return False
-            tmp = self.path.with_name(self.path.name + ".tmp")
+            tmp = self.path.with_name(f"{self.path.name}.{threading.get_ident()}.tmp")
             save_json(plan, tmp)
             os.replace(tmp, self.path)
             self.done = True
             return True
+        finally:
+            if locked:
+                self.lock.release()
 
-    def write_empty(self):
-        return self.write({"seed": self.seed, "routes": []})
+    def write_empty(self, wait=-1):
+        return self.write({"seed": self.seed, "routes": []}, wait)
 
 
 def start_watchdog(writer, deadline):
     def fire():
         try:
-            if writer.write_empty():
+            if writer.write_empty(wait=1.0):
                 print("planner: hard deadline reached, wrote the empty plan", file=sys.stderr)
         finally:
             sys.stderr.flush()
