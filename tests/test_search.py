@@ -432,6 +432,47 @@ class LnsTests(unittest.TestCase):
             (search_planner.SCOUT_SPEED_MODE, search_planner.OBS_STRETCH,
              search_planner.DIAGONAL_CLIMB) = saved
 
+    def exact_search(self):
+        search = Search(tour_scenario(), seconds=10)
+        search.checker.stop = time.monotonic() + 30
+        return search
+
+    def test_exact_reinsert_picks_best_order_and_shares_prefixes(self):
+        from types import SimpleNamespace as NS
+        search, calls = self.exact_search(), []
+        saved = search.checker.stop
+
+        def insert_best(state, contact):
+            calls.append(state.seq + (contact.id,))
+            self.assertLessEqual(search.checker.stop, time.monotonic() + search_planner.EXACT_REINSERT_S)
+            seq = state.seq + (contact.id,)
+            return NS(seq=seq, score=10.0 if seq == ('C', 'A', 'B') else float(len(seq)))
+        search.insert_best = insert_best
+        greedy = NS(seq=('A', 'B', 'C'), score=3.0)
+        subset = [NS(id=c) for c in 'ABC']
+        best = search.exact_reinsert(NS(seq=(), score=0.0), subset, greedy, random.Random(0))
+        self.assertEqual(best.seq, ('C', 'A', 'B'))
+        self.assertEqual(len(calls), len(set(calls)))  # each prefix built once
+        self.assertEqual(len(calls), 3 + 6 + 6)
+        self.assertEqual((search.lns['exact_steps'], search.lns['exact_orders'], search.lns['exact_wins']), (1, 6, 1))
+        self.assertEqual(search.checker.stop, saved)
+
+    def test_exact_reinsert_cap_restores_the_lns_deadline(self):
+        from types import SimpleNamespace as NS
+        search = self.exact_search()
+        saved = search.checker.stop
+
+        def capped(state, contact):
+            raise search_planner.DeadlineReached()
+        search.insert_best = capped
+        greedy, subset = NS(score=1.0), [NS(id='A'), NS(id='B')]
+        self.assertIs(search.exact_reinsert(NS(score=0.0), subset, greedy, random.Random(0)), greedy)
+        self.assertEqual(search.checker.stop, saved)
+        self.assertEqual(search.lns['exact_wins'], 0)
+        search.checker.stop = time.monotonic() - 1  # the LNS deadline itself has passed
+        with self.assertRaises(search_planner.DeadlineReached):
+            search.exact_reinsert(NS(score=0.0), subset, greedy, random.Random(0))
+
     def test_removal_is_valid_and_frees_the_contact(self):
         sc = Scenario.from_dict(generate('L2', 3))
         search = Search(sc, seconds=3.0, lns_share=0.0)
