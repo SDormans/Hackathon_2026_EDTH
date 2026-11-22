@@ -18,7 +18,7 @@ sys.path.insert(0, str(ROOT))
 import planner
 from candidate_matrix import CandidateMatrix
 import search_planner
-from search_planner import (DESTROY_OPERATORS, IncrementalValidator, Search, scout_tour,
+from search_planner import (DESTROY_OPERATORS, LNS_SHARE, LNS_SHARE_LARGE, IncrementalValidator, Search, scout_tour,
                             unserved_reason)
 from fleetkit.baseline import _Planner, greedy_plan
 from fleetkit.generator import generate
@@ -433,6 +433,12 @@ class LnsTests(unittest.TestCase):
             self.assertAlmostEqual(result.score, state.score, places=6)
         with self.assertRaises(ValueError):
             Search(sc, seconds=1, lns_share=1.5)
+
+    def test_default_lns_share_grows_with_contact_count(self):
+        small = Search(Scenario.from_dict(generate('L3', 0)), seconds=0.0)
+        large = Search(Scenario.from_dict(generate('L4', 0)), seconds=0.0)
+        self.assertEqual(small.lns_share, LNS_SHARE)
+        self.assertEqual(large.lns_share, LNS_SHARE_LARGE)
 
     def test_destroy_operators_pick_served_contacts(self):
         sc = Scenario.from_dict(generate('L2', 3))

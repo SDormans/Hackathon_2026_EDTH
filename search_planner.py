@@ -33,7 +33,9 @@ class DeadlineReached(Exception):
     pass
 
 
-DESTROY_OPERATORS = ("random", "related", "worst", "tour", "trip", "group", "strike")
+DESTROY_OPERATORS = ("random", "related", "worst", "tour", "trip", "group")
+TOUR_SHARE = 0.1        # share of LNS steps using "tour" (without --adaptive)
+TOUR_REBUILD = 0.5      # share of "tour" steps that clear the whole tour instead of k visits
 
 
 # Scout candidate generation.
@@ -1287,12 +1289,25 @@ class WarmPlanner(_Planner):
         return super()._add_observation(*args)
 
 
+# Default LNS share of the budget: larger scenarios gain more from repair than from more beam passes.
+LNS_SHARE = 0.4
+LNS_SHARE_LARGE = 0.6
+LNS_LARGE_CONTACTS = 40  # hostile + unknown contacts
+
+
+def default_lns_share(scenario):
+    n = sum(c.cls in (HOSTILE, UNKNOWN) for c in scenario.contacts)
+    return LNS_SHARE_LARGE if n >= LNS_LARGE_CONTACTS else LNS_SHARE
+
+
 class Search:
     def __init__(self, scenario, seconds=45.0, top_n=5, beam_width=9, start=None, lns_share=0.4,
                  interleave=False, adaptive=False, restarts=True, widen=False,
                  scout_speed="fast", obs_stretch=True):
         if seconds < 0 or not 1 <= top_n <= 100 or not 1 <= beam_width <= 100:
             raise ValueError("seconds must be nonnegative; top_n and beam_width must be 1..100")
+        if lns_share is None:
+            lns_share = default_lns_share(scenario)
         if not 0 <= lns_share <= 1:
             raise ValueError("lns_share must be 0..1")
         if scout_speed not in SCOUT_SPEEDS:
@@ -2387,6 +2402,8 @@ class Search:
             op = "trip"
         elif GROUP_SIZES and roll < TRIP_SHARE * bool(TRIP_SEARCH) + GROUP_SHARE:
             op = "group"
+        elif roll < TRIP_SHARE * bool(TRIP_SEARCH) + GROUP_SHARE * bool(GROUP_SIZES) + TOUR_SHARE:
+            op = "tour"
         elif STRIKE_GROUP and roll < (TRIP_SHARE * bool(TRIP_SEARCH) + GROUP_SHARE * bool(GROUP_SIZES)
                                       + STRIKE_SHARE):
             op = "strike"
@@ -2394,7 +2411,15 @@ class Search:
             op = "related" if rng.random() < 0.5 else "random"
         removed, trip_centre = [], []
         partial = current
-        if op in ("trip", "group", "strike"):
+        rebuild = False
+        if op == "tour" and rng.random() < TOUR_REBUILD:
+            sids = [sid for sid, tasks in current.tasks.items()
+                    if any(t["cid"] in current.served and t["cid"] in by_id for t in tasks)]
+            stripped = self.strip_scout(current, rng.choice(sids)) if sids else (None, ())
+            if stripped[0] is not None:
+                rebuild, partial = True, stripped[0]
+                removed = sorted(c for c in stripped[1] if c in by_id and c not in partial.served)
+        if op in ("trip", "group"):
             self.lns[op + "_tried"] += 1
             moved = (self.trip_move(current, rng) if op == "trip" else
                      self.group_move(current, rng) if op == "group" else
@@ -2431,6 +2456,10 @@ class Search:
                 self.checker.check_time()
             if chosen_child is not None:
                 partial = chosen_child
+        tally = self.lns["ops"].setdefault("tour_rebuild" if rebuild else op,
+                                           {"tried": 0, "accepted": 0, "improvements": 0,
+                                            "gain": 0.0})
+        tally["tried"] += 1
         delta = partial.score - current.score
         span = max(1e-6, self.stop - st["begin"])
         heat = st["temperature"] * max(0.0, self.stop - time.monotonic()) / span
