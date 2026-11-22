@@ -14,6 +14,37 @@ from scout_tours import SCOUT_LAYERS, scout_tour, trip_labels
 
 
 DESTROY_OPERATORS = ("random", "related", "worst", "tour", "trip", "group", "strike")
+# Moves that rebuild part of the plan themselves: Search.<op>_move(current, rng) returns
+# (partial, removed contact ids) or None.
+MOVE_OPERATORS = ("trip", "group", "strike")
+
+
+# Destroy operators: (search, served, by_id, current, priorities, rng, k) -> contact ids to remove.
+def destroy_random(search, served, by_id, current, priorities, rng, k):
+    return rng.sample(served, k)
+
+
+def destroy_related(search, served, by_id, current, priorities, rng, k):
+    seed = by_id[rng.choice(served)]
+    return sorted(served, key=lambda c: hdist(by_id[c].pos, seed.pos))[:k]
+
+
+def destroy_worst(search, served, by_id, current, priorities, rng, k):
+    return sorted(served, key=lambda c: priorities[c] * rng.uniform(0.8, 1.2))[:k]
+
+
+def destroy_tour(search, served, by_id, current, priorities, rng, k):
+    tours = [[t["cid"] for t in tasks if t["cid"] in current.served and t["cid"] in by_id]
+             for tasks in current.tasks.values()]
+    tours = [t for t in tours if t]
+    if not tours:
+        return destroy_random(search, served, by_id, current, priorities, rng, k)
+    tour = rng.choice(tours)
+    return rng.sample(tour, min(k, len(tour)))
+
+
+DESTROY = {"random": destroy_random, "related": destroy_related, "worst": destroy_worst,
+           "tour": destroy_tour, "trip": destroy_tour}
 
 
 def best_disjoint(lists, floor=-math.inf, nodes=None):
@@ -338,19 +369,7 @@ class LNSMixin:
 
     def destroy(self, op, served, by_id, current, priorities, rng):
         k = rng.randint(1, min(4, len(served)))
-        if op == "related":
-            seed = by_id[rng.choice(served)]
-            return sorted(served, key=lambda c: hdist(by_id[c].pos, seed.pos))[:k]
-        if op == "worst":
-            return sorted(served, key=lambda c: priorities[c] * rng.uniform(0.8, 1.2))[:k]
-        if op in ("tour", "trip"):
-            tours = [[t["cid"] for t in tasks if t["cid"] in current.served and t["cid"] in by_id]
-                     for tasks in current.tasks.values()]
-            tours = [t for t in tours if t]
-            if tours:
-                tour = rng.choice(tours)
-                return rng.sample(tour, min(k, len(tour)))
-        return rng.sample(served, k)
+        return DESTROY.get(op, destroy_random)(self, served, by_id, current, priorities, rng, k)
 
     def insert_best(self, partial, contact):
         """Best child inserting contact (0.08 s cap), or partial itself."""
@@ -423,12 +442,10 @@ class LNSMixin:
             if stripped[0] is not None:
                 rebuild, partial = True, stripped[0]
                 removed = sorted(c for c in stripped[1] if c in by_id and c not in partial.served)
-        if op in ("trip", "group", "strike"):
+        if op in MOVE_OPERATORS:
             self.lns[op + "_tried"] += 1
             try:
-                moved = (self.trip_move(current, rng) if op == "trip" else
-                         self.group_move(current, rng) if op == "group" else
-                         self.strike_move(current, rng))
+                moved = getattr(self, op + "_move")(current, rng)
             except DeadlineReached:
                 # A move's own time cap ended it; only the LNS deadline ends the phase.
                 self.checker.check_time()
@@ -439,7 +456,7 @@ class LNSMixin:
                 partial, stripped = moved
                 trip_centre = [by_id[c].pos for c in stripped if c in by_id]
                 removed = [c for c in stripped if c in by_id and c not in partial.served]
-        if served and not rebuild and op not in ("trip", "group", "strike"):
+        if served and not rebuild and op not in MOVE_OPERATORS:
             for cid in self.destroy(op, served, by_id, current, priorities, rng):
                 smaller = self.remove(partial, cid)
                 if smaller is not None:
@@ -471,10 +488,10 @@ class LNSMixin:
         span = max(1e-6, self.stop - st["begin"])
         heat = st["temperature"] * max(0.0, self.stop - time.monotonic()) / span
         reward = 0.0
-        if delta > 1e-9 or ((removed or op in ("trip", "group", "strike")) and heat > 0 and rng.random() < math.exp(delta / heat)):
+        if delta > 1e-9 or ((removed or op in MOVE_OPERATORS) and heat > 0 and rng.random() < math.exp(delta / heat)):
             self.lns["accepted"] += 1
             tally["accepted"] += 1
-            if op in ("trip", "group", "strike"):
+            if op in MOVE_OPERATORS:
                 self.lns[op + "_accepted"] += 1
             reward = 1.0 if delta > 1e-9 else 0.3
             current = st["current"] = self.record(partial, current, {"kind": "lns", "op": op,
@@ -485,7 +502,7 @@ class LNSMixin:
                 self.lns["gain"] += current.score - best.score
                 tally["improvements"] += 1
                 tally["gain"] += current.score - best.score
-                if op in ("trip", "group", "strike"):
+                if op in MOVE_OPERATORS:
                     self.lns[op + "_improvements"] += 1
                     self.lns[op + "_gain"] += current.score - best.score
                 st["best"], st["stale"], st["since_best"] = current, 0, 0

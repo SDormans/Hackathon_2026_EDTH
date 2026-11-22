@@ -46,6 +46,28 @@ def diverse_beam(ranked, width, diverse=None, extra=None):
     return beam + picked
 
 
+
+# Scout insertion moves: (search, parent, contact, insert) -> lazy (scout, tasks, route)
+# options, or None to skip. _children tries them in order and stops at the first round
+# that yields a child.
+def nearest_scouts(search, parent, contact, insert):
+    """The SCOUT_FANOUT best-ranked scouts, appending (or inserting when insert)."""
+    return search.scout_options(parent, contact, insert)
+
+
+def nearest_scouts_reordered(search, parent, contact, insert):
+    """Append mode only: the same scouts with insertion and reordering."""
+    return None if insert else search.scout_options(parent, contact, True, skip_append=True)
+
+
+def fallback_scouts(search, parent, contact, insert):
+    """The next SCOUT_FALLBACK - SCOUT_FANOUT scouts, with insertion."""
+    return search.scout_options(parent, contact, True,
+                                slice(CONFIG.scout_fanout, CONFIG.scout_fallback))
+
+
+SCOUT_MOVES = (nearest_scouts, nearest_scouts_reordered, fallback_scouts)
+
 class WarmPlanner(_Planner):
     """The original greedy choices, with incremental checks and a deadline."""
     def __init__(self, scenario, checker, state, stop):
@@ -246,10 +268,8 @@ class BeamMixin:
         if not groups:
             self._progress(stats, progress, "no_team")
             return
-        rounds = [self.scout_options(parent, contact, insert)]
-        if not insert:
-            rounds.append(self.scout_options(parent, contact, True, skip_append=True))
-        rounds.append(self.scout_options(parent, contact, True, slice(CONFIG.scout_fanout, CONFIG.scout_fallback)))
+        rounds = [r for r in (move(self, parent, contact, insert) for move in SCOUT_MOVES)
+                  if r is not None]
         state = {"count": 0, "seen": set()}
         if CONFIG.time_rank and not any(self.ranked_scouts(parent, contact, True)):
             # No scout has any visit order that fits, at any tour position.
