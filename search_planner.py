@@ -2421,9 +2421,14 @@ class Search:
                 removed = sorted(c for c in stripped[1] if c in by_id and c not in partial.served)
         if op in ("trip", "group", "strike"):
             self.lns[op + "_tried"] += 1
-            moved = (self.trip_move(current, rng) if op == "trip" else
-                     self.group_move(current, rng) if op == "group" else
-                     self.strike_move(current, rng))
+            try:
+                moved = (self.trip_move(current, rng) if op == "trip" else
+                         self.group_move(current, rng) if op == "group" else
+                         self.strike_move(current, rng))
+            except DeadlineReached:
+                # A move's own time cap ended it; only the LNS deadline ends the phase.
+                self.checker.check_time()
+                moved = None
             if moved is None:
                 op = "related"
             else:
