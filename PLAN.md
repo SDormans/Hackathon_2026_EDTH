@@ -27,6 +27,11 @@ Safety comes before cleverness.
 | 3 | Scouts: plan unknown contacts, insert each new visit at its best position in the tour | 10 of 15 scouts idle in L4 | ? | done: insertion in beam children and LNS, 8-scout fallback. 6 first scouts and extra departure shifts lost (README) |
 | 4 | Polish: swap/drop moves after the search, wait on the ground instead of hovering, fly at best-range speed | Small gains everywhere | ? | open: effectors already back-timed (no hover), scouts stretch legs instead of hovering, cruise at 0.995 v_h |
 
+## Link-loss policy (`policy.py`)
+- Safety pass done (reachable-set filter, 1 s off-schedule beacons, id-based yielding, deadlock escape): 1000 m × 200 B/s **0/400 failed runs**, retention 0.991, S_loss 0.959 (was 29/400, 0.922); 250 m × 50 B/s 1/400 (was 187/400). sizing_score 0.45. Details and the remaining failing runs in README, *Link-loss safety pass*.
+- Remaining: one pop-up zone that appears on top of an off-schedule aircraft (we think unavoidable) and rare R8 when a hold announcement is lost just before touchdown or at 50 B/s.
+- Planner `--sep-buffer` exists (default 0): the final link-loss evaluation uses the organisers' plans, so a buffer only costs plan score (README).
+
 ## How we accept a change
 1. Run the benchmark on the 8 validation scenarios **and** random new seeds.
 2. Merge only if the total score goes up **and** every plan passes the official validator.
