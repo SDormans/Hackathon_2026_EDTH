@@ -8,7 +8,7 @@ import time
 
 from fleetkit.baseline import _Planner
 from fleetkit.geometry import hdist
-from fleetkit.model import HOSTILE, UNKNOWN
+from fleetkit.model import EFFECTOR, HOSTILE, UNKNOWN
 from config import CONFIG
 from deadline import DeadlineReached
 from diagnostics import STAGES, outcome_stage
@@ -346,6 +346,27 @@ class BeamMixin:
                     improved = True
         return state
 
+    def bound_rank(self, order):
+        """Beam key: score plus CONFIG.beam_bound times the share of effectors still free
+        times the points of the contacts after the current depth (an optimistic remainder)."""
+        weight = CONFIG.beam_bound
+        if not weight:
+            return lambda state, depth: state.score
+        effectors = [a.id for a in self.aircraft.values() if a.type == EFFECTOR]
+        if not effectors:
+            return lambda state, depth: state.score
+        after = [0.0] * (len(order) + 1)
+        for i in range(len(order) - 1, -1, -1):
+            after[i] = after[i + 1] + max(0.0, order[i].points)
+        cache = {}
+
+        def rank(state, depth):
+            free = cache.get(state.used)
+            if free is None:
+                free = cache[state.used] = sum(1 for a in effectors if a not in state.used) / len(effectors)
+            return state.score + weight * free * after[depth]
+        return rank
+
     def search(self, contacts, priorities, rng):
         """Beam passes over varied contact orders until the checker deadline.
         Returns False once the trace cap is reached."""
@@ -362,6 +383,7 @@ class BeamMixin:
                 noise = {c.id: rng.uniform(0.65, 1.35) for c in contacts}
                 order = sorted(contacts, key=lambda c: (-priorities[c.id]*noise[c.id], c.id))
             pass_start = time.monotonic()
+            rank = self.bound_rank(order)
             beam = [self.root]
             for depth, contact in enumerate(order, 1):
                 self.checker.check_time()
@@ -380,7 +402,7 @@ class BeamMixin:
                     except DeadlineReached:
                         self.checker.check_time()  # Local cap expires without ending search.
                 unique = {}
-                for state in sorted(next_beam, key=lambda s: -s.score):
+                for state in sorted(next_beam, key=lambda s: -rank(s, depth)):
                     unique.setdefault(state.signature(), state)
                 width = self.width
                 if self.widen and self.passes >= 4:

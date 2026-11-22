@@ -12,6 +12,7 @@ class Config:
     # Scout candidate generation.
     beam_diverse: int = 3        # beam slots kept for states with an unrepresented used/served set
     beam_diverse_extra: bool = False  # diverse slots come on top of the width (else they replace its tail)
+    beam_bound: float = 0.15     # beam ranks by score + this * free-effector share * points still to come
     scout_fanout: int = 4        # scouts tried first for a contact
     scout_fallback: int = 8      # scouts tried when none of the first SCOUT_FANOUT gives a valid child
     full_insert_tasks: int = 4   # tours up to this long try every insertion position, not only 3
