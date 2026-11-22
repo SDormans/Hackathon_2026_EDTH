@@ -59,7 +59,7 @@ def score_plan(task):
            **search_planner.fragility_parts(plan, sc), "fragility": search_planner.plan_fragility(plan, sc)}
     try:
         ev = make_events(sc, plan, seed + 1)
-    except RuntimeError as exc:
+    except (RuntimeError, ValueError) as exc:
         return {**row, "skipped": str(exc)}
     oracle = oracle_points(sc, plan, ev)
     factory = load_policy(policy)
