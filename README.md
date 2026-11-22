@@ -542,8 +542,8 @@ search attempts, not proof that a contact is physically impossible to serve.
 - **Reclassified target:** an effector senses its target within 300 m, before reaching it, and turns back.
 - **Pop-up zone:** every move is checked against the zones an aircraft knows; it never enters one, including when turning back.
 - **Confirm before engage (R4):** an effector engages only when it knows the observation ended at least 11.5 s earlier. Observations finished before the cut come from the plan; later ones come from the scout's message, which carries the end time. Otherwise it waits short of the target, then turns back.
-- **Separation (R8):** each aircraft predicts its peers from the plan and from their announced (route time, rate), with ±1.5 s for stale messages and drones about to take off, and picks the move that keeps at least 55 m.
-- **Messages:** only rate changes (repeated, then refreshed every 8 s while off schedule) and scout observation notices, forwarded only to the effectors that strike that contact (`O_FORWARD`).
+- **Separation (R8):** each aircraft predicts its peers from the plan and from their announced (route time, rate), with ±1.5 s for stale messages and drones about to take off, and picks the move that keeps at least 55 m. Every move must also pass the reachable-set filter described under *Link-loss safety pass*.
+- **Messages:** only rate changes (repeated, then refreshed every 8 s while off schedule) and scout observation notices.
 - **Wire format:** one JSON string of type-coded records (`V` rate state, `O` observation, `R` reclassified, `Z` zone), base-93 printable ASCII, 1 byte per character; see the `policy.py` docstring. Same decisions as the dict format, fewer bytes; news-distribution columns (coverage, reach 90 %, t90, missed) are in `compare`.
 - **News (store and forward, on):** `NEWS_MODE = "forward"`. Each drone keeps every sensed or heard danger (reclassified contact, pop-up zone) and the peers it knows have it (heard it from them, or sent it 3 times while they were within half its estimated range). Each second it predicts peers from the plan and sends a danger only when a peer that may lack it is in reach; the range is estimated from the farthest distance a peer was heard from. `"burst"` (send 3 times on learning) and `"off"` remain available.
 - **Measured news distribution** (20 cases, L1-L4 seeds 0-4, one comm seed; drones airborne at the event that were still flying at the end and never knew it): off 12/16/25/19, burst 11/12/11/6, forward 7/3/2/1 at 250/500/1000/2000 m; capacity made no difference (messages are a few bytes). Messages about 8 per aircraft per minute in all three.
@@ -552,6 +552,62 @@ search attempts, not proof that a contact is physically impossible to serve.
 - **Coordination (on):** each drone now uses its picture of the fleet to stay on the plan rather than react to it. Pairs both on schedule trust the validated plan (`TRUST_PLAN`); scouts report the exact observation end (`EXACT_OBS_END`); a confirmed effector waits for late strike partners so the group still engages inside the sync window (`GROUP_SYNC`); an unconfirmed effector waits for a scout it knows is late while the window allows (`SCOUT_WAIT`). In safe runs before this, every contact lost against the oracle was a strike that missed sync because partners at the shared target backed off and reversed into one another.
 - **Measured** (20 cases L1-L4 seeds 0-4, 250/500/1000/2000 m at 200 B/s, 3 comm seeds, 240 runs): S_loss 0.855 → 0.926, failed runs 22 → 12, retention of safe runs 0.960 → 0.992; at 1000 and 2000 m 0 failures and retention 0.999-1.000. Unseen seeds 20-29 (1000 and 250 m, 2 comm seeds, 160 runs): S_loss 0.732 → 0.833, failed 28 → 20. 17 runs were fixed and 7 newly broken, all R8 at 250-500 m; the remaining failures are mostly `lost_message` at 250 m. Tried and dropped: assuming an off-plan peer may have stopped anywhere since its last message (fixed 500 m, but frozen "ghosts" of engaged effectors boxed others in: 24 failures).
 
+### Link-loss safety pass
+
+Each move must now pass a **one-step reachable-set filter** (`SAFE_STEP`): every peer is predicted from the plan (on schedule) or from its last announced (route time, rate), widened for a lost later message (it may have stopped since, `HULL_S`; it may have changed its mind, `ANY_CAP_S`), and a move must keep d_sep + `STEP_MARGIN_M` from all of it. Off-schedule aircraft beacon their state every `BEACON_S` = 1 s. Two off-schedule aircraft resolve conflicts by id: the later id gives way to any move of the earlier one, which trusts that only when the later one has announced a hold. Braking or holding also keeps clear of on-schedule traffic behind (`SLOW_LOOK_S`). Safe options are ranked by the room they keep over the next `AHEAD_S` = 3 s. After `STUCK_S` = 30 s held against its wish, an aircraft prefers any safe move for `UNSTICK_S` = 10 s, which breaks deadlocks near the base.
+
+Benchmark: `analysis/linkloss_bench.py` (our 45 s plans for the 8 validation scenarios in `output/ll/plans`, official `make_events` draws 1-10, comm seeds 0-4, 400 runs per setting); `analysis/linkloss_diag.py` replays one run second by second for a pair of aircraft.
+
+| Setting | Policy | Retention | Failed runs | Msgs/ac/min | S_loss |
+|---|---|---:|---:|---:|---:|
+| 1000 m × 200 B/s | before (master) | 0.922 | 29/400 | - | - |
+| 1000 m × 200 B/s | **now** | **0.991** | **0/400** | 15.9 | **0.959** |
+| 250 m × 50 B/s | before (master) | - | 187/400 | - | - |
+| 250 m × 50 B/s | **now** | **0.902** | **1/400** | 21.9 | **0.858** |
+
+Per scenario, now (50 runs each):
+
+| Scenario | Retention 1000×200 | Fail | Msgs/ac/min | S_loss | Retention 250×50 | Fail | Msgs/ac/min | S_loss |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| L1-101 | 1.000 | 0 | 12.5 | 0.975 | 1.000 | 0 | 14.0 | 0.972 |
+| L2-201 | 1.000 | 0 | 9.7 | 0.981 | 1.000 | 0 | 10.4 | 0.979 |
+| L2-202 | 1.000 | 0 | 16.1 | 0.968 | 0.784 | 0 | 26.0 | 0.732 |
+| L3-301 | 0.988 | 0 | 21.3 | 0.945 | 0.829 | 0 | 28.7 | 0.771 |
+| L3-302 | 0.972 | 0 | 23.3 | 0.926 | 0.931 | 1 | 28.9 | 0.873 |
+| L3-303 | 0.988 | 0 | 16.1 | 0.956 | 0.982 | 0 | 19.4 | 0.944 |
+| L4-401 | 0.983 | 0 | 13.9 | 0.955 | 0.867 | 0 | 21.5 | 0.824 |
+| L4-402 | 0.996 | 0 | 14.6 | 0.967 | 0.824 | 0 | 26.3 | 0.771 |
+
+Under 0.5 ms per call everywhere (0.26 ms at 1000 × 200).
+
+**Sizing sweep** (all 20 range × capacity cells, 400 runs each): retention
+
+| Range | 50 B/s | 100 | 200 | 400 | 800 |
+|---|---:|---:|---:|---:|---:|
+| 250 m | 0.902 (1 fail) | 0.902 (1) | 0.902 (1) | 0.902 (1) | 0.902 (1) |
+| 500 m | 0.976 | 0.976 | 0.976 | 0.976 | 0.976 |
+| 1000 m | 0.987 (2) | 0.991 | 0.991 | 0.991 | 0.991 |
+| 2000 m | 0.990 (1) | 0.990 (1) | 0.990 (1) | 0.990 (1) | 0.990 (1) |
+
+**sizing_score 0.45** (9 of 20 cells with retention ≥ 0.9 and no failure). Capacity hardly matters (messages are a few bytes); the failing cells share three runs:
+
+- **L3-302 draw 6, comm 4 (250 m, R6):** unavoidable as far as we can tell. A pop-up zone (radius 115 m) appears at t = 565 s on top of an aircraft that had left its schedule: L05, held near the base by two peers, was already inside the zone's footprint when it appeared. In a variant that kept L05 moving it went from 181 m to 26 m from the zone centre between t = 559 and 565 and failed the same way. `make_events` only checks that aircraft flying the original schedule are clear of a new zone.
+- **L3-302 draw 7, comm 3 (2000 m, R8 33.7 m) and L4-401 draw 4, comm 4 (1000 m × 50 B/s, R8 29 m):** a returning aircraft announced a hold a few seconds before touchdown and the message was lost; the peer extrapolated it as landed, dropped it and moved. A 3 s grace before dropping a "landed" peer (`LANDED_S = 3`) fixes both runs, but the full rerun broke 3 other runs at 250 m × 50 B/s (6 failures instead of 4 over 1000×200, 250×50, 1000×50, 2000×200), so it is not adopted.
+- **L4-401 draw 4, comm 2 (1000 m × 50 B/s, R8 36.9 m):** two aborted aircraft dancing around each other near the base; hold announcements lost at 50 B/s.
+
+Any change to the policy changes which messages are lost in every later second, so individual failing runs come and go between variants; compare totals over all draws, not single runs. Tried and dropped: `BEACON_S` 2 s (more R8 at 250 m), `SLOW_LOOK_S` = 4 (R6 deadlock at the base), treating silent holding peers as gone (fixed nothing, one new R8).
+
+**Messages:** S_loss is 0.032 below retention at the leaderboard setting, which is exactly μ × 15.9 messages per aircraft per minute. Most of them are the 1 s off-schedule beacons that the separation filter relies on. Lowering `FWD_TRIES` 3 → 2 (fewer danger-news repeats) saved nothing (16.1 messages, S_loss 0.958) and added one R8 at 250 m × 50 B/s (2/400), so it was not adopted. Danger news is a small share of the traffic; cutting the beacons would trade the safety above for at most about 0.02 S_loss.
+
+**Planner-side separation buffer.** `planner.py --sep-buffer M` (default 0) makes the search check R8 pairs against d_sep_m + M, so the plan itself leaves margin for trajectories flown after a cut; exported plans are still validated with the official scorer. Plan-score cost, L1-L4 seeds 0-1, 45 s, 4 workers, two rounds (totals per round):
+
+| Buffer | Round 1 | Round 2 | Mean | vs 0 m |
+|---|---:|---:|---:|---:|
+| 0 m | 4751.9 | 4780.9 | 4766.4 | - |
+| 10 m | 4580.5 | 4627.0 | 4603.7 | −162.6 (−3.4 %) |
+| 15 m | 4609.4 | 4611.2 | 4610.3 | −156.1 (−3.3 %) |
+
+All plans valid; the loss is almost all L4 (−130 to −200 per round), L1-L3 within 8 points. The link-loss benefit for the competition is zero: `LINKLOSS.md` says the final link-loss evaluation uses the organisers' own reference plans, not ours. So the default stays 0 and the margin stays policy-side (`SEP_MARGIN_M` = 15 m, `STEP_MARGIN_M`).
 ### Link-loss evaluation on held-out event seeds
 
 `analysis/linkloss_eval.py` builds the cases (8 validation scenarios, greedy plans, held-out event seeds 1001-1003 never used for tuning; development used 501-512), runs `fleetkit.linkloss.score.evaluate_cases` with 5 comm seeds on the leaderboard cell (1000 m, 200 B/s) and the full `sizing()` grid (4 ranges x 5 capacities, 2400 runs), and writes `analysis/linkloss/*.csv`, `analysis/linkloss_sizing.csv` (retention per cell + frontier of the kept variant) and `analysis/linkloss_sizing.svg`.

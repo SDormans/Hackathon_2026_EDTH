@@ -34,6 +34,11 @@ Safety comes before cleverness.
 - **Single process.** The grader's core count is unknown. `multiprocessing` startup and pickling `Scenario`/`State` would use seconds of the 45 s budget. A spawn failure on the grader would score 0. The expected gain does not justify the risk, so the planner stays single-process.
 - **Deadline margin.** Under CPU throttling (1.6–2.6× fewer candidate checks) the slowest held-out L4 case still finished in about 46 s with a valid plan. The 50 s `validate_stop` cutoff stays.
 
+## Link-loss policy (`policy.py`)
+- Safety pass done (reachable-set filter, 1 s off-schedule beacons, id-based yielding, deadlock escape): 1000 m × 200 B/s **0/400 failed runs**, retention 0.991, S_loss 0.959 (was 29/400, 0.922); 250 m × 50 B/s 1/400 (was 187/400). sizing_score 0.45. Details and the remaining failing runs in README, *Link-loss safety pass*.
+- Remaining: one pop-up zone that appears on top of an off-schedule aircraft (we think unavoidable) and rare R8 when a hold announcement is lost just before touchdown or at 50 B/s.
+- Planner `--sep-buffer` exists (default 0): the final link-loss evaluation uses the organisers' plans, so a buffer only costs plan score (README).
+
 ## How we accept a change
 1. Run the benchmark on the 8 validation scenarios **and** random new seeds.
 2. Merge only if the total score goes up **and** every plan passes the official validator.
