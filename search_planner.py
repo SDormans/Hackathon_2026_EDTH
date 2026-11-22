@@ -17,7 +17,8 @@ from fleetkit import baseline
 from fleetkit.baseline import (_Planner, _effector_route, _scout_route, EFFECTOR_LAYERS,
                                SCOUT_LAYERS, SPEED_FACTOR)
 from fleetkit.energy import best_range_speed, route_energy_wh
-from fleetkit.geometry import EPS, dist3, hdist, segment_enters_cylinder
+from fleetkit.geometry import (EPS, close_intervals, dist3, hdist, overlapping_pieces,
+                               segment_enters_cylinder)
 from fleetkit.model import EFFECTOR, HOSTILE, SCOUT, UNKNOWN, parse_plan
 from fleetkit.scorer import evaluate
 from fleetkit import validator as rules
@@ -35,9 +36,13 @@ class DeadlineReached(Exception):
 
 
 DESTROY_OPERATORS = ("random", "related", "worst", "tour", "trip", "group")
+TOUR_SHARE = 0.1        # share of LNS steps using "tour" (without --adaptive)
+TOUR_REBUILD = 0.5      # share of "tour" steps that clear the whole tour instead of k visits
 
 
 # Scout candidate generation.
+BEAM_DIVERSE = 3        # beam slots kept for states with an unrepresented used/served set
+BEAM_DIVERSE_EXTRA = False  # diverse slots come on top of the width (else they replace its tail)
 SCOUT_FANOUT = 4        # scouts tried first for a contact
 SCOUT_FALLBACK = 8      # scouts tried when none of the first SCOUT_FANOUT gives a valid child
 FULL_INSERT_TASKS = 4   # tours up to this long try every insertion position, not only 3
@@ -859,6 +864,16 @@ GROUP_POOL = 40          # at most this many pool contacts
 GROUP_MOVE_S = 0.8       # realisation time cap per move
 GROUP_NODES = 200000     # search nodes cap in best_disjoint
 
+# Joint strike repair.  Unlike a normal destroy/repair step this deliberately removes
+# the aircraft which actually violate R8 against an unserved target's candidate team,
+# then retries that target and the displaced strikes together.  Keep the switch here:
+# it makes an A/B run possible without changing the rest of LNS.
+STRIKE_GROUP = True
+STRIKE_SHARE = 0.2
+STRIKE_MOVE_S = 0.8
+STRIKE_CONFLICT_ROUTES = 18
+STRIKE_REMOVE_SIZES = (1, 2, 3)  # random count of conflicting hostile strikes to displace
+
 
 def best_disjoint(lists, floor=-math.inf, nodes=GROUP_NODES):
     """Best combination of one trip per list with pairwise disjoint contact masks.
@@ -894,6 +909,32 @@ def best_disjoint(lists, floor=-math.inf, nodes=GROUP_NODES):
 
     go(0, 0.0, 0)
     return None if best[1] is None else (best[0], best[1])
+
+
+def diverse_beam(ranked, width, diverse=BEAM_DIVERSE, extra=BEAM_DIVERSE_EXTRA):
+    """Best states by score plus up to `diverse` lower-ranked states whose consumed aircraft
+    (used set), then served set, is not yet represented in the kept beam."""
+    top = width if extra else max(1, width - diverse)
+    beam, rest = ranked[:top], ranked[top:]
+    used = {state.used for state in beam}
+    served = {state.served for state in beam}
+    slots = diverse if extra else width - top
+    picked, ids = [], set()
+    for novel in (lambda st: st.used not in used, lambda st: st.served not in served):
+        for state in rest:
+            if len(picked) >= slots:
+                break
+            if id(state) in ids or not novel(state):
+                continue
+            picked.append(state)
+            ids.add(id(state))
+            used.add(state.used)
+            served.add(state.served)
+    if not extra:
+        # Unfilled diverse slots go back to the next states by score.
+        picked += [st for st in rest if id(st) not in ids][:slots - len(picked)]
+    picked.sort(key=lambda st: -st.score)
+    return beam + picked
 
 
 def insertion_positions(home, tasks, pos, limit):
@@ -987,6 +1028,70 @@ def route_key(route):
     """Hashable identity of a waypoint list; routes are never edited after construction."""
     return tuple((w["t"], w["x"], w["y"], w["z"], w.get("dwell_s", 0.0), w.get("action"),
                   w.get("target")) for w in route)
+
+
+FRAGILITY_TIGHT_S = 10.0      # engage with less confirm slack than this is a tight coupling
+FRAGILITY_SEP_MARGIN_M = 20.0  # pairs closer than d_sep_m + this are near pairs
+FRAGILITY_GAP_CAP_S = 120.0    # confirm->strike gaps are capped here in the score
+
+
+def fragility_parts(plan, scenario):
+    """Link-loss fragility of a plan: what a delay or a lost message is most likely to break.
+
+    tight: engage waypoints whose confirm slack (engage t - completed observation end -
+    confirm_margin_s, earliest observation) is below FRAGILITY_TIGHT_S;
+    near_pairs: aircraft pairs ever closer than d_sep_m + FRAGILITY_SEP_MARGIN_M (effectors
+    striking the same contact are exempt); mean_gap_s: mean engage t - observation end.
+    """
+    routes, _ = parse_plan(plan)
+    routes = routes or {}
+    aircraft, contacts, r = scenario.aircraft_by_id(), scenario.contact_by_id(), scenario.rules
+    obs_end = {}
+    for aid, route in routes.items():
+        if aircraft.get(aid) is None or aircraft[aid].type != SCOUT:
+            continue
+        for wp in route.waypoints:
+            c = contacts.get(wp.target)
+            if wp.action == "observe" and c is not None and rules.valid_observation(wp, c, scenario):
+                end = wp.t + wp.dwell_s
+                obs_end[c.id] = min(end, obs_end.get(c.id, math.inf))
+    gaps = []
+    for aid, route in routes.items():
+        for wp in route.waypoints:
+            if wp.action == "engage" and wp.target in obs_end:
+                gaps.append(wp.t - obs_end[wp.target])
+    tight = sum(g - r.confirm_margin_s < FRAGILITY_TIGHT_S for g in gaps)
+    near_m = r.d_sep_m + FRAGILITY_SEP_MARGIN_M
+    items = []
+    for aid in sorted(routes):
+        ac = aircraft.get(aid)
+        item = rules.separation_item(aid, routes[aid], ac) if ac is not None else None
+        if item is None:
+            continue
+        pts = [p for piece in item[1] for p in (piece[2], piece[3])]
+        box = (min(p[0] for p in pts), max(p[0] for p in pts), min(p[1] for p in pts),
+               max(p[1] for p in pts), min(p[2] for p in pts), max(p[2] for p in pts))
+        items.append((item, box))
+    near = 0
+    for i, (a, ba) in enumerate(items):
+        for b, bb in items[i + 1:]:
+            if min(a[3], b[3]) <= max(a[2], b[2]) or (a[4] is not None and a[4] == b[4]):
+                continue
+            if (ba[0] - near_m > bb[1] or bb[0] - near_m > ba[1] or ba[2] - near_m > bb[3]
+                    or bb[2] - near_m > ba[3] or ba[4] - near_m > bb[5] or bb[4] - near_m > ba[5]):
+                continue
+            if any(close_intervals(pa, pb, lo, hi, near_m) is not None
+                   for pa, pb, lo, hi in overlapping_pieces(a[1], b[1])):
+                near += 1
+    return {"tight": tight, "near_pairs": near, "engages": len(gaps),
+            "mean_gap_s": sum(gaps) / len(gaps) if gaps else None}
+
+
+def plan_fragility(plan, scenario):
+    """Lower is sturdier: tight couplings + near pairs - capped mean confirm->strike gap share."""
+    f = fragility_parts(plan, scenario)
+    gap = min(f["mean_gap_s"], FRAGILITY_GAP_CAP_S) / FRAGILITY_GAP_CAP_S if f["engages"] else 1.0
+    return f["tight"] + f["near_pairs"] - gap
 
 
 class IncrementalValidator:
@@ -1250,12 +1355,25 @@ class WarmPlanner(_Planner):
         return super()._add_observation(*args)
 
 
+# Default LNS share of the budget: larger scenarios gain more from repair than from more beam passes.
+LNS_SHARE = 0.4
+LNS_SHARE_LARGE = 0.6
+LNS_LARGE_CONTACTS = 40  # hostile + unknown contacts
+
+
+def default_lns_share(scenario):
+    n = sum(c.cls in (HOSTILE, UNKNOWN) for c in scenario.contacts)
+    return LNS_SHARE_LARGE if n >= LNS_LARGE_CONTACTS else LNS_SHARE
+
+
 class Search:
-    def __init__(self, scenario, seconds=45.0, top_n=5, beam_width=6, start=None, lns_share=0.4,
+    def __init__(self, scenario, seconds=45.0, top_n=5, beam_width=9, start=None, lns_share=0.4,
                  interleave=False, adaptive=False, restarts=True, widen=False,
                  scout_speed="fast", obs_stretch=True):
         if seconds < 0 or not 1 <= top_n <= 100 or not 1 <= beam_width <= 100:
             raise ValueError("seconds must be nonnegative; top_n and beam_width must be 1..100")
+        if lns_share is None:
+            lns_share = default_lns_share(scenario)
         if not 0 <= lns_share <= 1:
             raise ValueError("lns_share must be 0..1")
         if scout_speed not in SCOUT_SPEEDS:
@@ -1282,7 +1400,9 @@ class Search:
                     "trip_gain": 0.0, "trip_label_s": 0.0,
                     "group_tried": 0, "group_realised": 0, "group_accepted": 0,
                     "group_improvements": 0, "group_gain": 0.0, "group_label_s": 0.0,
-                    "group_sizes": {}}
+                    "group_sizes": {},
+                    "strike_tried": 0, "strike_accepted": 0, "strike_improvements": 0,
+                    "strike_gain": 0.0}
         self._trip_cache = {}
         self.trip_stats = {}
         self.lns_share = lns_share
@@ -1310,7 +1430,8 @@ class Search:
 
     def stats(self, cid):
         if cid not in self.attempts:
-            self.attempts[cid] = {"attempts": 0, "warm_accepted": 0, "outcomes": {}, "rules": {}}
+            self.attempts[cid] = {"attempts": 0, "warm_accepted": 0, "outcomes": {}, "rules": {},
+                                  "beam_pruned": 0}
         return self.attempts[cid]
 
     def record(self, state, parent, decision, depth):
@@ -1603,6 +1724,88 @@ class Search:
                 if found:
                     break
 
+    def strike_route_options(self, contact, groups, scout, scout_route, obs_end, stop):
+        """A small, concrete sample of the routes ``strikes`` will try.
+
+        This is deliberately route based: the strike LNS move must identify R8
+        conflicts from the validator's separation items, not from pad or target
+        distance heuristics.  It does not validate or mutate a state.
+        """
+        base = max(obs_end + self.sc.rules.confirm_margin_s + 2.0, contact.window[0])
+        count = 0
+        for team in groups:
+            spacing = min(5.0, self.sc.rules.sync_window_s / max(1, len(team) - 1))
+            for delay, angle, layers in itertools.product(STRIKE_DELAYS, (0.0, 35.0, -35.0),
+                                                            effector_layer_sets()):
+                self.checker.check_time(stop)
+                arrive = base + delay
+                if arrive + spacing * (len(team) - 1) > contact.window[1] + EPS:
+                    break
+                extra = {}
+                for i, eff in enumerate(team):
+                    route, _ = effector_route(eff, contact, arrive + spacing * i,
+                                              layers[i % len(layers)], angle, self.sc)
+                    if route is None:
+                        break
+                    extra[eff.id] = route
+                if len(extra) == len(team):
+                    yield team, extra
+                    count += 1
+                    if count >= STRIKE_CONFLICT_ROUTES:
+                        return
+
+    def strike_conflicts(self, state, routes):
+        """Return existing aircraft which really violate R8/pad spacing with routes.
+
+        The caller supplies only prospective effector routes.  Every candidate is
+        parsed through the same route-info builder as incremental validation and
+        compared with every unchanged route, including scouts.
+        """
+        conflicts = set()
+        infos = {}
+        for aid, route in routes.items():
+            info = self.checker.route_info(aid, route)
+            if info[2]:
+                continue
+            infos[aid] = info
+        for aid, info in infos.items():
+            for oid, old in state.infos.items():
+                if oid == aid or oid in infos:
+                    continue
+                item = old[3]
+                if item is not None and info[3] is not None and rules.separation_violation(
+                        self.sc.rules, self.contacts, info[3][:5], item[:5]):
+                    conflicts.add(oid)
+            # The cheap pad test catches the same takeoff geometry before a full R8
+            # trajectory check, and identifies the concrete neighbouring aircraft.
+            for oid in pad_neighbours(self.sc, self.aircraft, aid):
+                old = state.routes.get(oid)
+                if old and pad_conflict(self.sc, self.aircraft, state.routes, {aid: routes[aid]}):
+                    conflicts.add(oid)
+        return conflicts
+
+    def observed_strike(self, state, cid):
+        """(scout, route, observation finish) for an already observed hostile."""
+        for sid, tasks in state.tasks.items():
+            if not any(t["cid"] == cid for t in tasks):
+                continue
+            route = state.routes.get(sid)
+            if route is None:
+                continue
+            times = [w["t"] + w.get("dwell_s", 0.0) for w in route
+                     if w.get("action") == "observe" and w.get("target") == cid]
+            if times:
+                return self.aircraft[sid], route, max(times)
+        return None
+
+    def drop_strike(self, state, cid):
+        """Drop just cid's effector routes, retaining its harmless scout observation."""
+        team = {aid for aid, route in state.parsed.items()
+                if any(w.action == "engage" and w.target == cid for w in route.waypoints)}
+        if not team:
+            return state
+        return self.checker.extend(self.checker.without(state, team), {})
+
     def repair(self, state, depth):
         """Greedy fill of what the search left unserved: unknowns join any scout tour at
         their cheapest positions, then hostiles retry with the free effectors."""
@@ -1648,7 +1851,7 @@ class Search:
             beam = [self.root]
             for depth, contact in enumerate(order, 1):
                 self.checker.check_time()
-                next_beam = []
+                next_beam, served = [], []
                 for parent in beam:
                     self.checker.check_time()
                     skipped = self.record(parent, parent, {"kind": "skip", "contact": contact.id}, depth)
@@ -1658,7 +1861,8 @@ class Search:
                     local_stop = min(self.checker.stop, time.monotonic()+allowance)
                     try:
                         for child, decision in self.children(parent, contact, local_stop):
-                            next_beam.append(self.record(child, parent, decision, depth))
+                            served.append(self.record(child, parent, decision, depth))
+                            next_beam.append(served[-1])
                     except DeadlineReached:
                         self.checker.check_time()  # Local cap expires without ending search.
                 unique = {}
@@ -1667,7 +1871,11 @@ class Search:
                 width = self.width
                 if self.widen and self.passes >= 4:
                     width = min(100, self.width + self.width // 2)
-                beam = list(unique.values())[:width]
+                beam = diverse_beam(list(unique.values()), width)
+                kept = {state.signature() for state in beam}
+                # Valid serving children cut by the beam width ("outranked" in the beam).
+                self.stats(contact.id)["beam_pruned"] += sum(
+                    1 for state in served if state.signature() not in kept)
             self.passes += 1
             if self.interleave and self.lns_share < 1:
                 burst = (time.monotonic() - pass_start) * self.lns_share / (1 - self.lns_share)
@@ -2028,6 +2236,104 @@ class Search:
         partial, _ = self.realise_trip(partial, scout, trips[pick][1], z, stop)
         return partial, sorted(removed)
 
+    def strike_move(self, current, rng):
+        """Jointly re-plan a blocked hostile and one to three R8-conflicting strikes.
+
+        Removing an effector route rather than its contact is important: the scout
+        observation remains a valid, reusable confirmation while alternative teams
+        and timings are explored.  The incremental checker then rechecks R4/R10 and
+        every changed-route separation pair on each re-strike.
+        """
+        open_ = [c for c in self.sc.contacts if c.cls == HOSTILE and c.window is not None
+                 and c.id not in current.served and c.id not in self.matrix.banned
+                 and self.matrix.priority(c) > 0]
+        if not open_:
+            return None
+        side = ("strike_rule:", "strike_route", "time_cap", "not_improving", "outranked")
+        preferred = [c for c in open_ if any(k.startswith(side) for k in
+                     self.attempts.get(c.id, {}).get("outcomes", {}))]
+        target = rng.choice(preferred or open_)
+        observed = self.observed_strike(current, target.id)
+        stop = min(self.checker.stop, time.monotonic() + STRIKE_MOVE_S)
+        # Most unserved contacts do not retain an observation: ordinary children are
+        # atomic.  Build one candidate scout visit solely to obtain the prospective
+        # strike trajectories for conflict discovery; after removal, children() does
+        # the normal fully-validated scout-and-strike insertion.
+        needs_observation = observed is None
+        if observed is None:
+            try:
+                scout, _, scout_route = next((x for x in self.scout_options(current, target, True)
+                                               if x[2] is not None), (None, None, None))
+            except DeadlineReached:
+                return None
+            if scout_route is None:
+                return None
+            obs = [w["t"] + w.get("dwell_s", 0.0) for w in scout_route
+                   if w.get("action") == "observe" and w.get("target") == target.id]
+            if not obs:
+                return None
+            obs_end = max(obs)
+        else:
+            scout, scout_route, obs_end = observed
+        conflicts = set()
+        # Use all currently installed effectors as prospective candidates.  The
+        # conflict-derived removals below make their actual availability explicit.
+        for _, routes in self.strike_route_options(target, self.matrix.groups(target, set(), 3),
+                                                    scout, scout_route, obs_end, stop):
+            conflicts.update(self.strike_conflicts(current, routes))
+            if len(conflicts) >= 3:
+                break
+        displaced = set()
+        for aid in conflicts:
+            route = current.parsed.get(aid)
+            if route is not None:
+                displaced.update(w.target for w in route.waypoints if w.action == "engage")
+        displaced.discard(target.id)
+        if not displaced:
+            return None
+        sizes = [n for n in STRIKE_REMOVE_SIZES if n <= len(displaced)]
+        if not sizes:
+            return None
+        count = rng.choice(sizes)
+        # Prefer low-value displaced strikes when the scarce effector pool cannot
+        # support every member of the group.
+        removed = sorted(displaced, key=lambda cid: self.matrix.priority(self.contacts[cid]))[:count]
+        partial = current
+        for cid in removed:
+            partial = self.drop_strike(partial, cid)
+            if partial is None:
+                return None
+        if needs_observation:
+            try:
+                created = max((state for state, _ in self.children(partial, target, stop, 2, True)),
+                              key=lambda s: s.score, default=None)
+            except DeadlineReached:
+                return None
+            if created is None:
+                return None
+            partial = created
+        group = [target.id] + removed
+        orders = (group, removed + [target.id],
+                  sorted(group, key=lambda cid: -self.matrix.priority(self.contacts[cid])))
+        best = None
+        for order in orders:
+            trial = partial
+            for cid in order:
+                self.checker.check_time(stop)
+                got = self.observed_strike(trial, cid)
+                if got is None:
+                    continue
+                a, route, end = got
+                children = self.strikes(trial, self.contacts[cid],
+                                        self.matrix.groups(self.contacts[cid], trial.used),
+                                        a, route, end, stop)
+                child = max((state for state, _ in children), key=lambda s: s.score, default=None)
+                if child is not None:
+                    trial = child
+            if best is None or trial.score > best.score:
+                best = trial
+        return best, group
+
     def group_scouts(self, state, n, rng):
         """n scouts for the group move: one picked like the trip move, then neighbours
         weighted by how close their tours (or bases) come to the chosen ones."""
@@ -2170,26 +2476,41 @@ class Search:
         roll = None if self.adaptive else rng.random()
         if self.adaptive:
             ops = [o for o in self.weights if (TRIP_SEARCH or o != "trip")
-                   and (GROUP_SIZES or o != "group")]
+                   and (GROUP_SIZES or o != "group") and (STRIKE_GROUP or o != "strike")]
             op = rng.choices(ops, weights=[self.weights[o] for o in ops])[0]
         elif TRIP_SEARCH and roll < TRIP_SHARE:
             op = "trip"
         elif GROUP_SIZES and roll < TRIP_SHARE * bool(TRIP_SEARCH) + GROUP_SHARE:
             op = "group"
+        elif roll < TRIP_SHARE * bool(TRIP_SEARCH) + GROUP_SHARE * bool(GROUP_SIZES) + TOUR_SHARE:
+            op = "tour"
+        elif STRIKE_GROUP and roll < (TRIP_SHARE * bool(TRIP_SEARCH) + GROUP_SHARE * bool(GROUP_SIZES)
+                                      + STRIKE_SHARE):
+            op = "strike"
         else:
             op = "related" if rng.random() < 0.5 else "random"
         removed, trip_centre = [], []
         partial = current
+        rebuild = False
+        if op == "tour" and rng.random() < TOUR_REBUILD:
+            sids = [sid for sid, tasks in current.tasks.items()
+                    if any(t["cid"] in current.served and t["cid"] in by_id for t in tasks)]
+            stripped = self.strip_scout(current, rng.choice(sids)) if sids else (None, ())
+            if stripped[0] is not None:
+                rebuild, partial = True, stripped[0]
+                removed = sorted(c for c in stripped[1] if c in by_id and c not in partial.served)
         if op in ("trip", "group"):
             self.lns[op + "_tried"] += 1
-            moved = self.trip_move(current, rng) if op == "trip" else self.group_move(current, rng)
+            moved = (self.trip_move(current, rng) if op == "trip" else
+                     self.group_move(current, rng) if op == "group" else
+                     self.strike_move(current, rng))
             if moved is None:
                 op = "related"
             else:
                 partial, stripped = moved
                 trip_centre = [by_id[c].pos for c in stripped if c in by_id]
                 removed = [c for c in stripped if c in by_id and c not in partial.served]
-        if served and op not in ("trip", "group"):
+        if served and op not in ("trip", "group", "strike"):
             for cid in self.destroy(op, served, by_id, current, priorities, rng):
                 smaller = self.remove(partial, cid)
                 if smaller is not None:
@@ -2215,13 +2536,17 @@ class Search:
                 self.checker.check_time()
             if chosen_child is not None:
                 partial = chosen_child
+        tally = self.lns["ops"].setdefault("tour_rebuild" if rebuild else op,
+                                           {"tried": 0, "accepted": 0, "improvements": 0,
+                                            "gain": 0.0})
+        tally["tried"] += 1
         delta = partial.score - current.score
         span = max(1e-6, self.stop - st["begin"])
         heat = st["temperature"] * max(0.0, self.stop - time.monotonic()) / span
         reward = 0.0
-        if delta > 1e-9 or ((removed or op in ("trip", "group")) and heat > 0 and rng.random() < math.exp(delta / heat)):
+        if delta > 1e-9 or ((removed or op in ("trip", "group", "strike")) and heat > 0 and rng.random() < math.exp(delta / heat)):
             self.lns["accepted"] += 1
-            if op in ("trip", "group"):
+            if op in ("trip", "group", "strike"):
                 self.lns[op + "_accepted"] += 1
             reward = 1.0 if delta > 1e-9 else 0.3
             current = st["current"] = self.record(partial, current, {"kind": "lns", "op": op,
@@ -2230,7 +2555,7 @@ class Search:
             if current.score > best.score + 1e-9:
                 self.lns["improvements"] += 1
                 self.lns["gain"] += current.score - best.score
-                if op in ("trip", "group"):
+                if op in ("trip", "group", "strike"):
                     self.lns[op + "_improvements"] += 1
                     self.lns[op + "_gain"] += current.score - best.score
                 st["best"], st["stale"], st["since_best"] = current, 0, 0
@@ -2257,6 +2582,7 @@ class Search:
             entry = {"cls": c.cls, "points": c.points, "served": c.id in served,
                      "attempts": stats["attempts"] if stats else 0,
                      "outcomes": dict(stats["outcomes"]) if stats else {},
+                     "beam_pruned": stats.get("beam_pruned", 0) if stats else 0,
                      "rules": dict(stats["rules"]) if stats else {}}
             if c.id not in served:
                 reason = unserved_reason(c, banned, stats)
@@ -2267,6 +2593,10 @@ class Search:
         return {"contacts": contacts,
                 "unserved": dict(sorted(summary.items(), key=lambda kv: -points[kv[0]])),
                 "unserved_points": dict(sorted(points.items(), key=lambda kv: -kv[1]))}
+
+    def fragility(self, state):
+        plan = state.plan(self.sc.seed)
+        return {**fragility_parts(plan, self.sc), "score": plan_fragility(plan, self.sc)}
 
     def report(self, verified):
         diagnostics = self.diagnostics(verified[0][1].served if verified else [])
@@ -2286,6 +2616,7 @@ class Search:
                 "unserved": diagnostics["unserved"],
                 "unserved_points": diagnostics["unserved_points"],
                 "contacts": diagnostics["contacts"],
+                "fragility": self.fragility(verified[0][0]) if verified else None,
                 "solutions": [{"rank": i, "node": state.node_id, "score": result.score,
                                "served": result.served} for i, (state, result) in enumerate(verified, 1)],
                 "nodes": self.trace}
