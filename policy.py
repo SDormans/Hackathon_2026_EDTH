@@ -99,6 +99,7 @@ HULL_S = 1e9             # an off-schedule peer may have stopped this long ago u
 ANY_CAP_S = 10.0        # how long an earlier-id peer may have been changing its mind unheard
 BEACON_S = 1.0          # off schedule with no peer believed near: re-announce this often
 FORMATION_M = 120.0     # an on-schedule peer this close that must stop is expected to stop where it is
+SLOW_LOOK_S = 4.0       # ... and so must braking or stopping
 REVERSE_LOOK_S = 8.0    # a reversal must keep clear of on-schedule peers' next seconds
 STALE_CAP_S = 3.0       # route-time drift assumed at most for a silent off-plan peer
 ESCAPE_GAIN_M = 2.0     # with no clear move, leave a hold only for this much more distance
@@ -681,9 +682,12 @@ class Policy:
                     continue
             tgt = self.peers[aid][1]
             centre = self.contacts[tgt].pos if (tgt is not None and tgt == self.target) else None
-            if REVERSE_LOOK_S > 0.0 and rate < 0.0 and not nominal and self._peer_on_plan(aid, t):
-                # turning back must not leave me in the way of on-schedule traffic coming up behind
-                ahead = _polyline(self.peers[aid][0], t + 1.0, t + 1.0 + REVERSE_LOOK_S)
+            look = REVERSE_LOOK_S if rate < 0.0 else SLOW_LOOK_S if rate < 1.0 else 0.0
+            if (look > 0.0 and not nominal and self._peer_on_plan(aid, t)
+                    and not (hold_on_plan and self._peer_blocked(aid, t, near))):
+                # turning back or braking must not leave me in the way of on-schedule traffic coming up
+                # behind (it may not hear of it in time)
+                ahead = _polyline(self.peers[aid][0], t + 1.0, t + 1.0 + look)
                 for b0, b1 in (list(zip(ahead, ahead[1:])) or [(ahead[0], ahead[0])]) if ahead else ():
                     if centre is None or not all(_d(q, centre) <= self.exempt for q in (mine[0], b0, b1)):
                         worst = min(worst, _seg_dist(mine[0], mine[0], b0, b1))
