@@ -281,6 +281,31 @@ Random n in 2–4 is the default. Its gain over base is +237 summed (+0.8%), but
 
 ### Local benchmark results
 
+### Joint re-plan of conflicting strikes (LNS operator `strike`)
+
+The strike move samples concrete candidate effector routes for an unserved positive-net
+hostile, identifies the existing aircraft that actually violate separation (including pad
+takeoffs), drops one to three conflicting hostile strike teams while retaining their scout
+observations, then retries the target and displaced strikes in several orders.  Every retry
+uses the normal incremental extension, so R4, R8 and R10 are rechecked globally.  It reports
+`strike_tried`, `strike_accepted`, `strike_improvements` and `strike_gain` in `lns`.
+
+Two 17-scenario, 45-second, four-worker frozen-copy runs compared master with random 1--3
+removed conflicts (`mix`), fixed sizes, and a 30% strike share.  All 204 candidate plans were
+valid; the slowest wall time was 46.1 s.  The default `mix` gained in both runs and on L4, so it
+is enabled at a 20% LNS share.
+
+| Run | Base | mix (1--3) | L4 base | L4 mix |
+|---|---:|---:|---:|---:|
+| 1 | 14304.5 | 14372.4 | 10401.6 | 10477.6 |
+| 2 | 14358.5 | 14447.0 | 10453.4 | 10551.3 |
+
+The move won/lost/tied 7/7/3 cases in run 1 and 8/6/3 in run 2.  It improved the best plan only
+six times across 3,477 attempts, so the +156.4 summed gain is small relative to the observed
+run noise.  It did not recover C22 or C07 in these winners; C30, C06, C14, C50, C48 and C17 were
+already served in the relevant board plans.  Fixed-size and higher-share variants were less
+consistent (the 30% share won run 1 but lost run 2), so they are not defaults.
+
 Measured on this machine with five-second search budgets. These are sampled scenarios, not a guarantee of performance on unseen inputs.
 
 | Scenario | Greedy score | Search score | Planner wall time |
