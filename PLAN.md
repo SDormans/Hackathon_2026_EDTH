@@ -39,6 +39,8 @@ Safety comes before cleverness.
 2. Merge only if the total score goes up **and** every plan passes the official validator.
 3. Don't tune to specific seeds: the final ranking uses unseen scenarios.
 
+Link-loss changes: evaluate with `analysis/linkloss_eval.py` on held-out event seeds (LB cell and full `sizing()` grid); accept only with no new failures.
+
 ## How we work
 - One person per task, each on their own branch.
 - Quick review before merging into `master`.

@@ -533,7 +533,7 @@ search attempts, not proof that a contact is physically impossible to serve.
 - **Pop-up zone:** every move is checked against the zones an aircraft knows; it never enters one, including when turning back.
 - **Confirm before engage (R4):** an effector engages only when it knows the observation ended at least 11.5 s earlier. Observations finished before the cut come from the plan; later ones come from the scout's message, which carries the end time. Otherwise it waits short of the target, then turns back.
 - **Separation (R8):** each aircraft predicts its peers from the plan and from their announced (route time, rate), with ±1.5 s for stale messages and drones about to take off, and picks the move that keeps at least 55 m.
-- **Messages:** only rate changes (repeated, then refreshed every 8 s while off schedule) and scout observation notices.
+- **Messages:** only rate changes (repeated, then refreshed every 8 s while off schedule) and scout observation notices, forwarded only to the effectors that strike that contact (`O_FORWARD`).
 - **Wire format:** one JSON string of type-coded records (`V` rate state, `O` observation, `R` reclassified, `Z` zone), base-93 printable ASCII, 1 byte per character; see the `policy.py` docstring. Same decisions as the dict format, fewer bytes; news-distribution columns (coverage, reach 90 %, t90, missed) are in `compare`.
 - **News (store and forward, on):** `NEWS_MODE = "forward"`. Each drone keeps every sensed or heard danger (reclassified contact, pop-up zone) and the peers it knows have it (heard it from them, or sent it 3 times while they were within half its estimated range). Each second it predicts peers from the plan and sends a danger only when a peer that may lack it is in reach; the range is estimated from the farthest distance a peer was heard from. `"burst"` (send 3 times on learning) and `"off"` remain available.
 - **Measured news distribution** (20 cases, L1-L4 seeds 0-4, one comm seed; drones airborne at the event that were still flying at the end and never knew it): off 12/16/25/19, burst 11/12/11/6, forward 7/3/2/1 at 250/500/1000/2000 m; capacity made no difference (messages are a few bytes). Messages about 8 per aircraft per minute in all three.
@@ -541,6 +541,32 @@ search attempts, not proof that a contact is physically impossible to serve.
 
 - **Coordination (on):** each drone now uses its picture of the fleet to stay on the plan rather than react to it. Pairs both on schedule trust the validated plan (`TRUST_PLAN`); scouts report the exact observation end (`EXACT_OBS_END`); a confirmed effector waits for late strike partners so the group still engages inside the sync window (`GROUP_SYNC`); an unconfirmed effector waits for a scout it knows is late while the window allows (`SCOUT_WAIT`). In safe runs before this, every contact lost against the oracle was a strike that missed sync because partners at the shared target backed off and reversed into one another.
 - **Measured** (20 cases L1-L4 seeds 0-4, 250/500/1000/2000 m at 200 B/s, 3 comm seeds, 240 runs): S_loss 0.855 → 0.926, failed runs 22 → 12, retention of safe runs 0.960 → 0.992; at 1000 and 2000 m 0 failures and retention 0.999-1.000. Unseen seeds 20-29 (1000 and 250 m, 2 comm seeds, 160 runs): S_loss 0.732 → 0.833, failed 28 → 20. 17 runs were fixed and 7 newly broken, all R8 at 250-500 m; the remaining failures are mostly `lost_message` at 250 m. Tried and dropped: assuming an off-plan peer may have stopped anywhere since its last message (fixed 500 m, but frozen "ghosts" of engaged effectors boxed others in: 24 failures).
+
+### Link-loss evaluation on held-out event seeds
+
+`analysis/linkloss_eval.py` builds the cases (8 validation scenarios, greedy plans, held-out event seeds 1001-1003 never used for tuning; development used 501-512), runs `fleetkit.linkloss.score.evaluate_cases` with 5 comm seeds on the leaderboard cell (1000 m, 200 B/s) and the full `sizing()` grid (4 ranges x 5 capacities, 2400 runs), and writes `analysis/linkloss/*.csv`, `analysis/linkloss_sizing.csv` (retention per cell + frontier of the kept variant) and `analysis/linkloss_sizing.svg`.
+
+```sh
+python3 analysis/linkloss_eval.py run --policy policy.py --name wcap --workers 8
+python3 analysis/linkloss_eval.py report --sizing-from wcap
+```
+
+| Variant | Retention (LB) | Failed runs (LB) | Msgs/ac/min | S_loss | Grid failures | sizing_score | Frontier | Beats continue and return from |
+|---|---:|---:|---:|---:|---:|---:|---|---|
+| continue | 0.000 | 120/120 | 0.00 | 0.000 | 2400/2400 | 0.00 | none | never |
+| return | 0.399 | 20/120 | 0.00 | 0.399 | 400/2400 | 0.00 | none | never |
+| hold | 0.473 | 0/120 | 0.00 | 0.473 | 0/2400 | 0.00 | none | 50 B/s at every range |
+| Phase 5 | 0.967 | 2/120 | 9.56 | 0.948 | 174/2400 | 0.00 | none | never (fails a run in every row) |
+| + `BOXED_NOMINAL` | 0.973 | 1/120 | 9.58 | 0.954 | 121/2400 | 0.00 | none | never |
+| + `O_FORWARD` | 0.986 | 0/120 | 5.65 | 0.975 | 94/2400 | 0.50 | 1000:50 2000:50 | 50 B/s at 1000 and 2000 m |
+| **+ `WINDOW_CAP` (kept)** | **0.986** | **0/120** | **5.65** | **0.975** | **94/2400** | **0.50** | **1000:50 2000:50** | **50 B/s at 1000 and 2000 m** |
+
+A cell "meets" when it has 0 failures and beats continue and all-return; `hold` meets everywhere but keeps only 47 %. **The 0-violation gate is not met**: the kept variant has 0 failures at 1000 and 2000 m, but 17-18/120 runs fail at 250 m and 1-2/120 at 500 m, all separation (R8). No R4 failure occurred in any variant.
+
+- **Step 1, messages:** nothing is sent while on plan. The only periodic traffic is the `V` refresh every `REFRESH_S` while off schedule. Removing it (development seeds, 250/500/1000 m) raised failures from 51/1/3 to 77/15/8 of 480; replacing it with sends to peers coming into reach (`V_FORWARD`) gave 57/3/3; both together, or a 2-4 s refresh, improved 250 m (30-31) but worsened 500 m (5-6). The 8 s refresh stays. The old O traffic (every second until the last strike + 25 s) was most messages; `O_FORWARD` sends each notice only to that contact's strike effectors, store-and-forward, and cut traffic from 9.6 to 5.6 msgs/ac/min while removing the last leaderboard failure.
+- **Step 2, proceed rule:** an effector engages only on a confirmation it holds: from the plan when the observation ended before the cut, or from a heard O. Otherwise it holds short (grace, or a late scout's predicted observation) but never past window end minus `HOLD_LEAD_S`, then returns. Engaging on the scout's predicted state without an O was tried and broke R4 in about a quarter of runs (silent scout failures and unheard deviations), so it is not used. Waiting all the way to the window end added R8 conflicts (250 m: 50 -> 60 failures). `WINDOW_CAP` is neutral on held-out seeds.
+- **Step 3, handover: not implemented.** A policy can only continue, hold, change speed or return along its own planned route (`LINKLOSS.md`), so no aircraft can fly to another's task. Only effectors that already strike the same contact could "take over", and they already engage independently once confirmed (`GROUP_SYNC`). No `A` record was added.
+- **Step 4, tight budgets:** without messages the policy holds or returns, never strikes unconfirmed (0 R4 everywhere). Capacity hardly matters (messages are a few bytes); range does. The remaining 250 m failures are aircraft that are already boxed in: every move breaks 55 m against some possible peer state. `BOXED_NOMINAL` then picks the move with most room against announced states, which removed about 30 % of grid failures but not all. More `V` traffic trades 250 m failures for 500 m ones. Fixing the rest needs plans with more spacing or earlier, coordinated aborts.
 
 Run the official check (with the updated official kit on `PYTHONPATH`):
 
