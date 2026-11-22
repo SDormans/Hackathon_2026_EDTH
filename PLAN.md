@@ -30,6 +30,22 @@ Safety comes before cleverness.
 | 5 | Beam: keep diverse states, rank by optimistic bound, allow cheaper non-improving children, sweep width | `outranked` contacts: valid serves cut by the beam | Devin | done: `BEAM_DIVERSE = 3` and width 9 kept (+251 held-out); bound ranking and relaxed children lost or never fired (README) |
 | 6 | LNS phase 3: conflict-targeted destroy, whole-tour rebuild, exact reinsertion order, `lns_share` split | Repair is where L4 gains come from | ? | done: kept the size-dependent `lns_share` (0.6 with ≥ 40 hostile+unknown contacts) and the whole-tour rebuild (`tour` 10% of the mix, half of picks rebuild). On beam width 9: held-out 35111.07 → 35415.98 (+304.9, 64/64 valid). `blocker` lost and stays out. Exact reinsertion lost before `strike`; after the strike merge it won held-out 35330.53 → 35462.70 (+132.2, 64/64 valid) and is kept ([history](history/2026-11-22-phase3.md)) |
 
+## Link-loss API summary (kit `fleetkit/linkloss/{sim,policies,score,events,oracle}.py`)
+- Policy: `Policy(scenario, plan, aircraft_id)` with `step(obs) -> (action, message)`, called every 1 s per active aircraft from `t_loss` on; before the cut every aircraft flies its plan exactly.
+- `obs`: `t`, `t_loss`, `pos`, `vel`, `tau` (route clock), `mode` (`route`/`return`), `next_wp`, `energy_left_wh`, `own_observed`, `sensed` (events within 300 m), `inbox` (messages delivered this step), `last_heard` (latest payload per peer).
+- Actions move only the route clock: `continue` (+1), `hold` (0), `return` (−1, retrace the route home), `speed` (scale clamped to 0.5–1). No altitude, heading or reroute action: a policy cannot leave its planned path.
+- Messages: compact JSON ≤ 64 B (larger ones are dropped), broadcast, delivered the **next** step (1-step latency).
+- Delivery: base loss 5%; range factor 1 up to r_max/2, then linear to 0 at r_max; per-receiver airtime cap `p_cap = min(1, cap / bytes offered to that receiver this step)`.
+- Sensing: reclassification within 300 m of the contact, pop-up zone within 300 m of its edge.
+- Failures (score 0 for the run): R8 separation on the flown pieces, R6 entry into a zone (including active pop-ups), R4 engage with no completed valid observation, engaging a contact at/after its reclassification, policy exceptions, wall-clock cap.
+- Retention = min(1, V_exec / V_oracle), 0 for a failed run. Leaderboard: `S_loss = retention − 0.002 × messages/aircraft/min` at `LEADERBOARD = (1000 m, 200 B/s)`, 5 comm seeds.
+- Sizing grid: ranges 250/500/1000/2000 m × capacities 50/100/200/400/800 B/s; a cell passes at mean retention ≥ `THETA = 0.9` **and** zero failed runs; `sizing_score` = passing share, frontier = smallest passing capacity per range.
+- Oracle: full information, continue/hold/return only, holds whenever a move breaks separation; event sets are kept only if the oracle survives with points > 0.
+- `make_events` is adversarial: it keeps a draw only if the oracle copes **and** blind `ContinuePolicy` fails. `t_loss` ∈ [0.25, 0.5] × plan span; 2–3 events of `reclassify` (≥ 45 s before the strike), `failure` (scout before a needed observation or one member of a multi-effector team), `popup_zone` (60–120 m radius centred on a planned route point, nobody inside at appearance).
+
+## Held-out seeds (evaluate only, never tune)
+L1, L2, L3, L4 × seeds 30–45 (64 cases). Tuning seeds: L1–L4 × 0–2 and 15–20 (36 cases). Benchmark: `python3 test_logger.py --workers 1 --seconds 45`.
+
 ## Decisions
 - **Single process.** The grader's core count is unknown. `multiprocessing` startup and pickling `Scenario`/`State` would use seconds of the 45 s budget. A spawn failure on the grader would score 0. The expected gain does not justify the risk, so the planner stays single-process.
 - **Deadline margin.** Under CPU throttling (1.6–2.6× fewer candidate checks) the slowest held-out L4 case still finished in about 46 s with a valid plan. The 50 s `validate_stop` cutoff stays.
