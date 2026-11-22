@@ -41,8 +41,9 @@ def main():
                         help="search deadline including startup (default 45, capped at 55 seconds)")
     parser.add_argument("--top-n", type=int, default=5)
     parser.add_argument("--beam-width", type=int, default=9)
-    parser.add_argument("--lns-share", type=float, default=0.4,
-                        help="final share of the search budget spent repairing the best plan (0..1)")
+    parser.add_argument("--lns-share", type=float, default=None,
+                        help="final share of the search budget spent repairing the best plan (0..1; "
+                             "default 0.4, or 0.6 with at least 40 hostile+unknown contacts)")
     parser.add_argument("--interleave", action="store_true",
                         help="alternate beam passes with LNS bursts instead of LNS only at the end")
     parser.add_argument("--adaptive", action="store_true",
@@ -61,7 +62,7 @@ def main():
     args = parser.parse_args()
     if not 0 <= args.seconds <= 55 or not 1 <= args.top_n <= 100 or not 1 <= args.beam_width <= 100:
         parser.error("seconds must be 0..55; top-n and beam-width must be 1..100")
-    if not 0 <= args.lns_share <= 1:
+    if args.lns_share is not None and not 0 <= args.lns_share <= 1:
         parser.error("lns-share must be 0..1")
     scenario = Scenario.from_dict(load_json(args.scenario))
     search = Search(scenario, args.seconds, args.top_n, args.beam_width, START, args.lns_share,
