@@ -10,6 +10,7 @@ Safety comes before cleverness.
 - Greedy baseline on the 8 validation scenarios: **2664.5** total
 - Our search planner: *(to be measured)*
 - In L4 the baseline wins about 1,000 of about 3,700 available points and uses only 5 of 15 scouts.
+- Phase 2 beam (held-out L1–L4 seeds 30–45, 45 s, one worker): **35151.40** vs 34900.15 before (35044.05 for the same base code in the scout-tour phase run). All 64 plans valid, slowest run 45.9 s. Kept: diversity slots and beam width 9. Dropped: bound ranking and non-improving children ([README](README.md#phase-2-beam-changes-held-out-seeds-3045-45-s)).
 
 ## What we found
 - **Takeoff collisions.** All aircraft sit on pads ~11 m apart, but separation (R8) needs 40 m.
@@ -24,8 +25,14 @@ Safety comes before cleverness.
 |---|------|-----|-------|--------|
 | 1 | Safety: stop at ~45–50 s (now up to 58 s), build the hand-in folder, run `check_handin.py` on many seeds | Avoid timeouts on a slower grading machine | ? | done: 45 s search, validation stops at 50 s, slowest held-out L4 run 45.9 s |
 | 2 | Takeoff scheduling: own takeoff time, heading and altitude per aircraft | Fix R8 at the base; likely the biggest gain | Daaksh | done: pad-aware takeoffs (`PAD_TAKEOFFS`). Remaining R8 is mostly en route; per-member takeoff slots, layer pairs and wider spacing all lost (README) |
-| 3 | Scouts: plan unknown contacts, insert each new visit at its best position in the tour | 10 of 15 scouts idle in L4 | ? | done: insertion in beam children and LNS, 8-scout fallback. 6 first scouts and extra departure shifts lost (README) |
-| 4 | Polish: swap/drop moves after the search, wait on the ground instead of hovering, fly at best-range speed | Small gains everywhere | ? | open: effectors already back-timed (no hover), scouts stretch legs instead of hovering, cruise at 0.995 v_h |
+| 3 | Scouts: plan unknown contacts, insert each new visit at its best position in the tour | 10 of 15 scouts idle in L4 | ? | done: insertion in beam children and LNS, 8-scout fallback. 6 first scouts and extra departure shifts lost. Scout-tour phase: cheapest-insertion beam expansion and slack-ranked fanout 6/10 won on tuning but lost on held-out seeds 30–45 (−83.69), shared observation points lost; all reverted (README). Only 3 L4 scout-rule failures remain; most misses are `scout_window` and `outranked` |
+| 4 | Polish: swap/drop moves after the search, wait on the ground instead of hovering, fly at best-range speed | Small gains everywhere | ? | open: effectors already back-timed (no hover), scouts stretch legs instead of hovering, cruise at 0.995 v_h. Relocation/2-opt polish of scout orders lost (−48.19 on tuning seeds) and was reverted |
+| 5 | Beam: keep diverse states, rank by optimistic bound, allow cheaper non-improving children, sweep width | `outranked` contacts: valid serves cut by the beam | Devin | done: `BEAM_DIVERSE = 3` and width 9 kept (+251 held-out); bound ranking and relaxed children lost or never fired (README) |
+| 6 | LNS phase 3: conflict-targeted destroy, whole-tour rebuild, exact reinsertion order, `lns_share` split | Repair is where L4 gains come from | ? | done: kept the size-dependent `lns_share` (0.6 with ≥ 40 hostile+unknown contacts) and the whole-tour rebuild (`tour` 10% of the mix, half of picks rebuild). On beam width 9: held-out 35111.07 → 35415.98 (+304.9, 64/64 valid). `blocker` and exact reinsertion lost and were reverted ([history](history/2026-11-22-phase3.md)) |
+
+## Decisions
+- **Single process.** The grader's core count is unknown. `multiprocessing` startup and pickling `Scenario`/`State` would use seconds of the 45 s budget. A spawn failure on the grader would score 0. The expected gain does not justify the risk, so the planner stays single-process.
+- **Deadline margin.** Under CPU throttling (1.6–2.6× fewer candidate checks) the slowest held-out L4 case still finished in about 46 s with a valid plan. The 50 s `validate_stop` cutoff stays.
 
 ## Link-loss policy (`policy.py`)
 - Safety pass done (reachable-set filter, 1 s off-schedule beacons, id-based yielding, deadlock escape): 1000 m × 200 B/s **0/400 failed runs**, retention 0.991, S_loss 0.959 (was 29/400, 0.922); 250 m × 50 B/s 1/400 (was 187/400). sizing_score 0.45. Details and the remaining failing runs in README, *Link-loss safety pass*.
@@ -36,6 +43,8 @@ Safety comes before cleverness.
 1. Run the benchmark on the 8 validation scenarios **and** random new seeds.
 2. Merge only if the total score goes up **and** every plan passes the official validator.
 3. Don't tune to specific seeds: the final ranking uses unseen scenarios.
+
+Link-loss changes: evaluate with `analysis/linkloss_eval.py` on held-out event seeds (LB cell and full `sizing()` grid); accept only with no new failures.
 
 ## How we work
 - One person per task, each on their own branch.

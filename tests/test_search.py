@@ -18,7 +18,7 @@ sys.path.insert(0, str(ROOT))
 import planner
 from candidate_matrix import CandidateMatrix
 import search_planner
-from search_planner import (DESTROY_OPERATORS, IncrementalValidator, Search, scout_tour,
+from search_planner import (DESTROY_OPERATORS, LNS_SHARE, LNS_SHARE_LARGE, IncrementalValidator, Search, scout_tour,
                             unserved_reason)
 from fleetkit.baseline import _Planner, greedy_plan
 from fleetkit.generator import generate
@@ -217,7 +217,7 @@ class SearchTests(unittest.TestCase):
         search = Search(sc, start=start)
         self.assertAlmostEqual(search.stop - start, 45.0)
         self.assertAlmostEqual(search.validate_stop - start, 50.0)
-        self.assertAlmostEqual(Search(sc, seconds=55, start=start).validate_stop - start, 58.0)
+        self.assertAlmostEqual(Search(sc, seconds=55, start=start).validate_stop - start, 56.5)
 
     def test_finalize_after_cutoff_keeps_valid_fallback(self):
         sc = scenario()
@@ -256,6 +256,8 @@ class SearchTests(unittest.TestCase):
             report = json.loads((work / 'artifacts/tree.json').read_text())
             self.assertTrue((work / 'artifacts/tree.html').exists())
             self.assertTrue(report['solutions'])
+            self.assertGreater(report['solutions'][0]['score'], 0)
+            self.assertAlmostEqual(evaluate(parsed, plan).score, report['solutions'][0]['score'], places=6)
             for p in (work / 'artifacts').glob('plan-*.json'):
                 self.assertTrue(evaluate(parsed, json.loads(p.read_text())).valid)
 
@@ -287,6 +289,33 @@ def diagnostic_scenario():
         hostile('EARLY', [2500, 2500, 0], {'light': 1}, [0, 20]),
     ]
     return Scenario.from_dict(data)
+
+
+class FragilityTests(unittest.TestCase):
+    def test_parts_and_later_strikes(self):
+        sc = Scenario.from_dict(generate('L2', 1))
+        plan = greedy_plan(sc)
+        parts = search_planner.fragility_parts(plan, sc)
+        self.assertGreater(parts['engages'], 0)
+        self.assertEqual(parts, search_planner.fragility_parts(copy.deepcopy(plan), sc))
+        gap = min(parts['mean_gap_s'], search_planner.FRAGILITY_GAP_CAP_S) / search_planner.FRAGILITY_GAP_CAP_S
+        self.assertAlmostEqual(search_planner.plan_fragility(plan, sc),
+                               parts['tight'] + parts['near_pairs'] - gap)
+        later = copy.deepcopy(plan)
+        effectors = {a.id for a in sc.aircraft if a.type == 'effector'}
+        for route in later['routes']:
+            if route['aircraft'] in effectors:
+                for wp in route['waypoints']:
+                    wp['t'] += 60.0
+        shifted = search_planner.fragility_parts(later, sc)
+        self.assertEqual(shifted['tight'], 0)
+        self.assertAlmostEqual(shifted['mean_gap_s'], parts['mean_gap_s'] + 60.0)
+
+    def test_empty_plan(self):
+        sc = Scenario.from_dict(generate('L1', 0))
+        self.assertEqual(search_planner.fragility_parts({'seed': sc.seed, 'routes': []}, sc),
+                         {'tight': 0, 'near_pairs': 0, 'engages': 0, 'mean_gap_s': None})
+        self.assertEqual(search_planner.plan_fragility({'seed': sc.seed, 'routes': []}, sc), -1.0)
 
 
 class DiagnosticsTests(unittest.TestCase):
@@ -406,7 +435,9 @@ class LnsTests(unittest.TestCase):
     def test_removal_is_valid_and_frees_the_contact(self):
         sc = Scenario.from_dict(generate('L2', 3))
         search = Search(sc, seconds=3.0, lns_share=0.0)
-        best = search.run()[0][0]
+        # Beam plan only: with lns_share=0, LNS still runs if the beam finishes early.
+        search.search_phase()
+        best = search.finalize()[0][0]
         self.assertEqual(search.lns['iterations'], 0)
         search.checker.stop = time.monotonic() + 30
         removed = 0
@@ -433,6 +464,12 @@ class LnsTests(unittest.TestCase):
             self.assertAlmostEqual(result.score, state.score, places=6)
         with self.assertRaises(ValueError):
             Search(sc, seconds=1, lns_share=1.5)
+
+    def test_default_lns_share_grows_with_contact_count(self):
+        small = Search(Scenario.from_dict(generate('L3', 0)), seconds=0.0)
+        large = Search(Scenario.from_dict(generate('L4', 0)), seconds=0.0)
+        self.assertEqual(small.lns_share, LNS_SHARE)
+        self.assertEqual(large.lns_share, LNS_SHARE_LARGE)
 
     def test_destroy_operators_pick_served_contacts(self):
         sc = Scenario.from_dict(generate('L2', 3))
@@ -747,6 +784,28 @@ class CacheTests(unittest.TestCase):
         self.assertGreater(seen['checked'], 100)
         self.assertGreater(seen['rejected'], 10)
 
+
+class DiverseBeamTests(unittest.TestCase):
+    @staticmethod
+    def state(score, used, served):
+        return search_planner.State({}, {}, frozenset(used), {}, {}, {}, frozenset(served), score)
+
+    def test_keeps_top_and_adds_unrepresented_used_sets(self):
+        ranked = [self.state(10, 'a', 'x'), self.state(9, 'a', 'y'), self.state(8, 'a', 'y'),
+                  self.state(7, 'b', 'z'), self.state(6, 'a', 'w'), self.state(5, 'c', 'x')]
+        beam = search_planner.diverse_beam(ranked, 2, diverse=2, extra=True)
+        self.assertEqual([s.score for s in beam], [10, 9, 7, 5])
+        beam = search_planner.diverse_beam(ranked, 2, diverse=3, extra=True)
+        # Third slot: no new used set left, first unrepresented served set.
+        self.assertEqual([s.score for s in beam], [10, 9, 7, 6, 5])
+
+    def test_replace_mode_keeps_width(self):
+        ranked = [self.state(10 - i, 'a', 'x') for i in range(5)] + [self.state(1, 'b', 'x')]
+        beam = search_planner.diverse_beam(ranked, 4, diverse=2, extra=False)
+        self.assertEqual([s.score for s in beam], [10, 9, 8, 1])
+        self.assertEqual(len(search_planner.diverse_beam(ranked[:5], 4, diverse=2, extra=False)), 4)
+        self.assertEqual(len(search_planner.diverse_beam(ranked[:2], 4, diverse=2)), 2)
+
 if __name__ == '__main__':
     unittest.main()
 
@@ -973,3 +1032,82 @@ class GroupTests(unittest.TestCase):
         for state, result in verified:
             self.assertTrue(evaluate(sc, state.plan(sc.seed)).valid)
             self.assertAlmostEqual(result.score, state.score, places=6)
+
+
+class StrikeGroupTests(unittest.TestCase):
+    """Strike-side LNS uses route conflicts and retains scout confirmations."""
+    def test_conflict_finder_uses_actual_r8_candidate_route(self):
+        sc = scenario()
+        # Put the two effector pads inside R8 separation distance.  Two identical
+        # strike trajectories then genuinely conflict; this is not a target-distance
+        # approximation.
+        sc = replace(sc, aircraft=[replace(a, home=(0, 0, 0)) if a.type == 'effector' else a
+                                   for a in sc.aircraft])
+        s = Search(sc, seconds=10)
+        contact = sc.contacts[0]
+        eff = [a for a in sc.aircraft if a.type == 'effector']
+        first, _ = search_planner.effector_route(eff[0], contact, 180.0, 40.0, 0.0, sc)
+        second, _ = search_planner.effector_route(eff[1], contact, 180.0, 40.0, 0.0, sc)
+        info = s.checker.route_info(eff[0].id, first)
+        parent = search_planner.State({eff[0].id: first}, {a.id: [] for a in sc.aircraft if a.type == 'scout'},
+                                      frozenset(), {eff[0].id: info[1]}, {eff[0].id: info[3]},
+                                      {eff[0].id: info[4]}, frozenset(), 0.0,
+                                      infos={eff[0].id: info})
+        self.assertIn(eff[0].id, s.strike_conflicts(parent, {eff[1].id: second}))
+
+    def test_drop_and_restrike_retains_observation_and_is_valid(self):
+        sc = Scenario.from_dict(generate('L4', 9))
+        s = Search(sc, seconds=6.0, lns_share=0.0)
+        best = s.run()[0][0]
+        s.checker.stop = time.monotonic() + 60.0
+        cid = next(c for c in best.served if s.contacts[c].cls == 'hostile')
+        partial = s.drop_strike(best, cid)
+        self.assertIsNotNone(partial)
+        self.assertNotIn(cid, partial.served)
+        self.assertTrue(any(t['cid'] == cid for ts in partial.tasks.values() for t in ts))
+        scout, route, end = s.observed_strike(partial, cid)
+        children = list(s.strikes(partial, s.contacts[cid], s.matrix.groups(s.contacts[cid], partial.used),
+                                  scout, route, end, time.monotonic() + 10.0))
+        self.assertTrue(children)
+        child = max((state for state, _ in children), key=lambda state: state.score)
+        result = evaluate(sc, child.plan(sc.seed))
+        self.assertTrue(result.valid, [str(v) for v in result.violations][:3])
+        self.assertIn(cid, child.served)
+
+    def test_strike_operator_can_be_disabled(self):
+        sc = Scenario.from_dict(generate('L3', 4))
+        old = search_planner.STRIKE_GROUP, search_planner.TRIP_SHARE, search_planner.GROUP_SHARE
+        search_planner.STRIKE_GROUP, search_planner.TRIP_SHARE, search_planner.GROUP_SHARE = False, 0.0, 0.0
+        try:
+            s = Search(sc, seconds=4.0, lns_share=0.5)
+            verified = s.run()
+        finally:
+            search_planner.STRIKE_GROUP, search_planner.TRIP_SHARE, search_planner.GROUP_SHARE = old
+        self.assertEqual(s.lns['strike_tried'], 0)
+        self.assertTrue(evaluate(sc, verified[0][0].plan(sc.seed)).valid)
+
+    def test_move_time_cap_does_not_end_lns(self):
+        sc = Scenario.from_dict(generate('L3', 4))
+        old = (search_planner.TRIP_SHARE, search_planner.GROUP_SHARE, search_planner.TOUR_SHARE,
+               search_planner.STRIKE_SHARE, Search.strike_move)
+
+        def capped(self, current, rng):
+            raise search_planner.DeadlineReached
+        search_planner.TRIP_SHARE = search_planner.GROUP_SHARE = search_planner.TOUR_SHARE = 0.0
+        search_planner.STRIKE_SHARE, Search.strike_move = 1.0, capped
+        try:
+            s = Search(sc, seconds=4.0, lns_share=0.5)
+            verified = s.run()
+        finally:
+            (search_planner.TRIP_SHARE, search_planner.GROUP_SHARE, search_planner.TOUR_SHARE,
+             search_planner.STRIKE_SHARE, Search.strike_move) = old
+        self.assertGreater(s.lns['strike_tried'], 1)
+        self.assertTrue(evaluate(sc, verified[0][0].plan(sc.seed)).valid)
+
+    def test_strike_operator_runs_in_default_mix(self):
+        sc = Scenario.from_dict(generate('L3', 4))
+        s = Search(sc, seconds=4.0, lns_share=0.5)
+        verified = s.run()
+        self.assertGreater(s.lns['strike_tried'], 0)
+        self.assertIn('strike', s.weights)
+        self.assertTrue(evaluate(sc, verified[0][0].plan(sc.seed)).valid)

@@ -24,6 +24,18 @@ Coordination, using what every drone knows of its peers (plan + announced states
   no longer slow down just short of a plan that had 12 s between observation and strike.
 - GROUP_SYNC: a confirmed effector holds short while its strike partners' predicted
   engagements are further behind it than the plan's own spread (or sync window - 6 s).
+- O_FORWARD: a scout's "observed" notice is stored and forwarded like a danger, but only to the
+  effectors that strike that contact (until each is within half the estimated range for three sends,
+  or a few far tries); effectors relay it to their partners. Before, the scout repeated it every
+  second until the last planned strike plus 25 s, which was most of the traffic.
+- WINDOW_CAP (proceed rule): an effector engages only on a confirmation it holds: from the plan
+  when the observation ended before the cut, or from a heard O notice. Without one it holds short
+  until the grace (or a late scout's predicted observation) runs out, but never past its contact's
+  window end minus HOLD_LEAD_S, then returns. Engaging on the scout's *predicted* observation was
+  tried and rejected: silent scout failures and lost deviations made it break R4 in ~25 % of runs.
+- BOXED_NOMINAL: when no rate keeps the separation margin against every move a right-of-way peer
+  may make, the rate with the most room against announced states is taken (worst case breaks ties),
+  instead of the best worst case, which is often a near tie that points into the peer's actual path.
 - SCOUT_WAIT: an unconfirmed effector waits for a scout it knows is late (from the scout's
   announced state) for as long as the contact's window allows, instead of a fixed 15 s.
 
@@ -261,13 +273,14 @@ class Policy:
             if aid != aircraft_id:
                 self.peers[aid] = (RouteClock(r), self._target(r, aircraft[aid]))
         self.peer_state = {}           # aid -> (tau at t0, rate, t0)
-        self.obs_end, self.last_engage = {}, {}
+        self.obs_end, self.last_engage, self.strikers = {}, {}, {}
         for aid, r in routes.items():
             for wp in r.waypoints:
                 if wp.action == "observe" and aircraft[aid].type == SCOUT:
                     self.obs_end.setdefault(wp.target, []).append(wp.t + wp.dwell_s)
                 elif wp.action == "engage" and aircraft[aid].type == EFFECTOR:
                     self.last_engage[wp.target] = max(self.last_engage.get(wp.target, 0.0), wp.t)
+                    self.strikers.setdefault(wp.target, []).append(aid)
         self.sync_s = rules.sync_window_s
         self.group = [aid for aid, (_, tgt) in self.peers.items() if self.target is not None and tgt == self.target]
         self.obs_wp = {}               # contact -> [(scout id, planned route time the observation ends)]
@@ -318,17 +331,20 @@ class Policy:
                     c, end = self.contact_ids[rec[1]], rec[2]
                     if c not in self.confirmed or end < self.confirmed[c]:
                         self.confirmed[c] = end
+                    if O_FORWARD:
+                        self._note_obs(c, self.confirmed[c], t, m["from"])
                 elif kind == "R" and rec[1] < len(self.contact_ids):
                     self._learn_reclassified(self.contact_ids[rec[1]], t, m["from"])
                 elif kind == "Z":
                     self._learn_zone((rec[1], rec[2], rec[3] + ZONE_PAD_M, ZONE_TOP_M), t, m["from"])
 
-    def _note_news(self, key, rec, t, sender):
+    def _note_news(self, key, rec, t, sender, audience=None):
         """Queues a danger for sending, or counts a peer's echo of one we already have."""
         item = self.news.get(key)
         if item is None:
             item = self.news[key] = {"rec": rec, "left": NEWS_SENDS if NEWS_MODE == "burst" else 0, "next": t,
-                                     "echoes": set(), "informed": set(), "tries": {}, "far": {}, "next_to": {}}
+                                     "echoes": set(), "informed": set(), "tries": {}, "far": {}, "next_to": {},
+                                     "audience": audience}
         if sender is not None:
             item["echoes"].add(sender)
             item["informed"].add(sender)  # it sent the danger, so it has it
@@ -357,9 +373,11 @@ class Policy:
         rng = max(FWD_RANGE_MIN_M, self.heard_max_d)
         close_m, far_m = FWD_CLOSE_SHARE * rng, FWD_FAR_SHARE * rng
         dist = {}
-        for item in self.news.values():
+        for item in list(self.news.values()):
+            if NEWS_MODE != "forward" and item["audience"] is None:
+                continue
             targets = []
-            for pid in self.peers:
+            for pid in (self.peers if item["audience"] is None else item["audience"]):
                 if pid in item["informed"] or t < item["next_to"].get(pid, -1e9):
                     continue
                 if pid not in dist:
@@ -384,6 +402,16 @@ class Policy:
                 else:
                     item["far"][pid] = item["far"].get(pid, 0) + 1
                     item["next_to"][pid] = t + FWD_FAR_GAP_S
+
+    def _note_obs(self, c, end, t, sender=None):
+        """An observation notice for the effectors that strike `c` and may not have it yet."""
+        audience = [a for a in self.strikers.get(c, ()) if a != self.id]
+        if not audience:
+            return
+        key = ("O", c)
+        if key in self.news and self.news[key]["rec"][2] != end:
+            self.news[key]["rec"] = ("O", self.contact_index[c], end)
+        self._note_news(key, ("O", self.contact_index[c], end), t, sender, audience)
 
     def _learn_reclassified(self, contact, t, sender=None):
         self.reclassified.add(contact)
@@ -419,7 +447,7 @@ class Policy:
             return None            # engaged, landed or still on the ground
         return clock.position(tau)
 
-    def _room(self, t, tau, rate):
+    def _room(self, t, tau, rate, nominal=False):
         """Smallest predicted distance to any peer over the look-ahead for a constant rate."""
         here = self.clock.position(tau)
         near = []
@@ -443,9 +471,9 @@ class Policy:
             for aid in near:
                 # An off-plan peer with a lower id has the right of way: it may move any way.
                 known = aid in self.peer_state
-                rates = (None, -1.0, 0.0, 1.0) if (known and aid < self.id) else (None,)
+                rates = (None, -1.0, 0.0, 1.0) if (known and aid < self.id and not nominal) else (None,)
                 # An announced state may be a step or so stale (a lost or late message).
-                shifts = (-SLACK_S, 0.0, SLACK_S) if known else (0.0,)
+                shifts = (-SLACK_S, 0.0, SLACK_S) if known and not nominal else (0.0,)
                 for ro, sh in ((ro, sh) for ro in rates for sh in shifts):
                     p = self._peer_pos(aid, t + dt + sh, ro)
                     if p is None:
@@ -487,13 +515,16 @@ class Policy:
     def _grace_until(self, t):
         """How long an unconfirmed effector waits: the fixed grace, or longer for a scout known to be late."""
         until = self.engage_t + HOLD_GRACE_S
+        if WINDOW_CAP and self.window_end is not None:
+            until = min(until, max(self.engage_t, self.window_end - HOLD_LEAD_S))
         if not SCOUT_WAIT:
             return until
         for aid, tau_end in self.obs_wp.get(self.target, []):
             if aid in self.peer_state and self.peer_state[aid][1] >= 0.0:
                 until = max(until, self._peer_eta(aid, tau_end, t) + self.margin + SCOUT_WAIT_PAD_S)
         if self.window_end is not None:
-            until = min(until, max(self.engage_t + HOLD_GRACE_S, self.window_end))
+            cap = self.window_end - HOLD_LEAD_S if WINDOW_CAP else self.window_end
+            until = min(until, max(self.engage_t + (0.0 if WINDOW_CAP else HOLD_GRACE_S), cap))
         return until
 
     def _on_plan(self, t, tau, rate):
@@ -564,6 +595,10 @@ class Policy:
                 break
             if room > best_room:
                 choice, best_room = r, room
+        else:
+            if BOXED_NOMINAL:
+                choice = max(options, key=lambda r: (min(self._room(t, tau, r, nominal=True), self.sep),
+                                                     self._room(t, tau, r)))
         self.rate = choice
         if STUCK_S > 0.0 and choice == 0.0 and wanted != 0.0 and abs(tau - t) > ON_PLAN_S:
             # held off schedule against my wish this long: peers may be waiting on me; try moving
@@ -787,7 +822,9 @@ class Policy:
             for c in obs["own_observed"]:
                 if c not in self.reported:
                     self.reported[c] = self._obs_end_report(c, obs)
-                    if c in self.last_engage:
+                    if O_FORWARD:
+                        self._note_obs(c, self.reported[c], t)
+                    elif c in self.last_engage:
                         self.announce[c] = max(self.last_engage[c], t) + ANNOUNCE_AFTER_S
             live = sorted(c for c, until in self.announce.items() if t <= until)
             records += [("O", self.contact_index[c], self.reported[c]) for c in live[:2]]
@@ -806,9 +843,9 @@ class Policy:
         if changed or due:
             records.insert(0, ("V", tau, rate))         # own state first: separation depends on it
             self.last_sent = t
-        if NEWS_MODE == "forward":
+        if NEWS_MODE == "forward" or O_FORWARD:
             self._forward(obs, records)
-        elif NEWS_MODE == "burst":
+        if NEWS_MODE == "burst":
             for item in self.news.values():
                 if item["left"] > 0 and t >= item["next"]:
                     records.append(item["rec"])
