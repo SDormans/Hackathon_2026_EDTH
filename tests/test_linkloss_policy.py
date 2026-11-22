@@ -1,5 +1,6 @@
 """Link-loss policy rules: proceed only on a held confirmation, targeted O notices, no R4 breaks."""
 from pathlib import Path
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -55,6 +56,16 @@ class PolicyRuleTests(unittest.TestCase):
         c = sorted(p.strikers)[0]
         p._note_obs(c, 100.0, 0.0)
         self.assertEqual(set(p.news[('O', c)]['audience']), set(p.strikers[c]) - {p.id})
+
+
+class HarnessCliTests(unittest.TestCase):
+    def test_eval_harness_exposes_run_and_report(self):
+        for cmd in ('run', 'report'):
+            r = subprocess.run([sys.executable, str(ROOT / 'analysis' / 'linkloss_eval.py'), cmd, '-h'],
+                               capture_output=True, text=True)
+            self.assertEqual(r.returncode, 0, r.stderr)
+            self.assertIn(f'linkloss_eval.py {cmd}', r.stdout)
+
 
 if __name__ == '__main__':
     unittest.main()
