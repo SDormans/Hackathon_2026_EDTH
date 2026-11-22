@@ -1038,3 +1038,11 @@ class StrikeGroupTests(unittest.TestCase):
             search_planner.STRIKE_GROUP, search_planner.TRIP_SHARE, search_planner.GROUP_SHARE = old
         self.assertEqual(s.lns['strike_tried'], 0)
         self.assertTrue(evaluate(sc, verified[0][0].plan(sc.seed)).valid)
+
+    def test_strike_operator_runs_in_default_mix(self):
+        sc = Scenario.from_dict(generate('L3', 4))
+        s = Search(sc, seconds=4.0, lns_share=0.5)
+        verified = s.run()
+        self.assertGreater(s.lns['strike_tried'], 0)
+        self.assertIn('strike', s.weights)
+        self.assertTrue(evaluate(sc, verified[0][0].plan(sc.seed)).valid)

@@ -33,7 +33,7 @@ class DeadlineReached(Exception):
     pass
 
 
-DESTROY_OPERATORS = ("random", "related", "worst", "tour", "trip", "group")
+DESTROY_OPERATORS = ("random", "related", "worst", "tour", "trip", "group", "strike")
 TOUR_SHARE = 0.1        # share of LNS steps using "tour" (without --adaptive)
 TOUR_REBUILD = 0.5      # share of "tour" steps that clear the whole tour instead of k visits
 
@@ -1301,7 +1301,7 @@ def default_lns_share(scenario):
 
 
 class Search:
-    def __init__(self, scenario, seconds=45.0, top_n=5, beam_width=9, start=None, lns_share=0.4,
+    def __init__(self, scenario, seconds=45.0, top_n=5, beam_width=9, start=None, lns_share=None,
                  interleave=False, adaptive=False, restarts=True, widen=False,
                  scout_speed="fast", obs_stretch=True):
         if seconds < 0 or not 1 <= top_n <= 100 or not 1 <= beam_width <= 100:
@@ -1335,7 +1335,7 @@ class Search:
                     "group_improvements": 0, "group_gain": 0.0, "group_label_s": 0.0,
                     "group_sizes": {},
                     "strike_tried": 0, "strike_accepted": 0, "strike_improvements": 0,
-                    "strike_gain": 0.0}
+                    "strike_gain": 0.0, "ops": {}}
         self._trip_cache = {}
         self.trip_stats = {}
         self.lns_share = lns_share
@@ -2405,7 +2405,7 @@ class Search:
         elif roll < TRIP_SHARE * bool(TRIP_SEARCH) + GROUP_SHARE * bool(GROUP_SIZES) + TOUR_SHARE:
             op = "tour"
         elif STRIKE_GROUP and roll < (TRIP_SHARE * bool(TRIP_SEARCH) + GROUP_SHARE * bool(GROUP_SIZES)
-                                      + STRIKE_SHARE):
+                                      + TOUR_SHARE + STRIKE_SHARE):
             op = "strike"
         else:
             op = "related" if rng.random() < 0.5 else "random"
@@ -2419,7 +2419,7 @@ class Search:
             if stripped[0] is not None:
                 rebuild, partial = True, stripped[0]
                 removed = sorted(c for c in stripped[1] if c in by_id and c not in partial.served)
-        if op in ("trip", "group"):
+        if op in ("trip", "group", "strike"):
             self.lns[op + "_tried"] += 1
             moved = (self.trip_move(current, rng) if op == "trip" else
                      self.group_move(current, rng) if op == "group" else
@@ -2430,7 +2430,7 @@ class Search:
                 partial, stripped = moved
                 trip_centre = [by_id[c].pos for c in stripped if c in by_id]
                 removed = [c for c in stripped if c in by_id and c not in partial.served]
-        if served and op not in ("trip", "group", "strike"):
+        if served and not rebuild and op not in ("trip", "group", "strike"):
             for cid in self.destroy(op, served, by_id, current, priorities, rng):
                 smaller = self.remove(partial, cid)
                 if smaller is not None:
@@ -2466,6 +2466,7 @@ class Search:
         reward = 0.0
         if delta > 1e-9 or ((removed or op in ("trip", "group", "strike")) and heat > 0 and rng.random() < math.exp(delta / heat)):
             self.lns["accepted"] += 1
+            tally["accepted"] += 1
             if op in ("trip", "group", "strike"):
                 self.lns[op + "_accepted"] += 1
             reward = 1.0 if delta > 1e-9 else 0.3
@@ -2475,6 +2476,8 @@ class Search:
             if current.score > best.score + 1e-9:
                 self.lns["improvements"] += 1
                 self.lns["gain"] += current.score - best.score
+                tally["improvements"] += 1
+                tally["gain"] += current.score - best.score
                 if op in ("trip", "group", "strike"):
                     self.lns[op + "_improvements"] += 1
                     self.lns[op + "_gain"] += current.score - best.score
