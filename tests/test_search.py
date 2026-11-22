@@ -18,7 +18,8 @@ sys.path.insert(0, str(ROOT))
 import planner
 from candidate_matrix import CandidateMatrix
 import search_planner
-from search_planner import (DESTROY_OPERATORS, LNS_SHARE, LNS_SHARE_LARGE, IncrementalValidator, Search, scout_tour,
+from config import CONFIG
+from search_planner import (DESTROY_OPERATORS, IncrementalValidator, Search, scout_tour,
                             unserved_reason)
 from fleetkit.baseline import _Planner, greedy_plan
 from fleetkit.generator import generate
@@ -45,6 +46,11 @@ def scenario():
     return Scenario.from_dict(dict(seed=1, level='test', horizon_s=900,
                                    aircraft=aircraft, contacts=contacts, zones=[]))
 
+
+
+HANDIN_FILES = ['planner.py', 'search_planner.py', 'candidate_matrix.py', 'tree_view.py', 'config.py',
+                'deadline.py', 'route_geometry.py', 'effector_teams.py', 'scout_tours.py',
+                'incremental_validation.py', 'diagnostics.py', 'beam.py', 'lns.py']
 
 class IncrementalTests(unittest.TestCase):
     @classmethod
@@ -239,7 +245,7 @@ class SearchTests(unittest.TestCase):
         # Copy only hand-in modules, with fleetkit supplied by the runner.
         with tempfile.TemporaryDirectory() as tmp:
             work = Path(tmp)
-            for name in ['planner.py', 'search_planner.py', 'candidate_matrix.py', 'tree_view.py']:
+            for name in HANDIN_FILES:
                 shutil.copy2(ROOT / name, work / name)
             sc = generate('L1', 7)
             save_json(sc, work / 'scenario.json')
@@ -298,7 +304,7 @@ class FragilityTests(unittest.TestCase):
         parts = search_planner.fragility_parts(plan, sc)
         self.assertGreater(parts['engages'], 0)
         self.assertEqual(parts, search_planner.fragility_parts(copy.deepcopy(plan), sc))
-        gap = min(parts['mean_gap_s'], search_planner.FRAGILITY_GAP_CAP_S) / search_planner.FRAGILITY_GAP_CAP_S
+        gap = min(parts['mean_gap_s'], CONFIG.fragility_gap_cap_s) / CONFIG.fragility_gap_cap_s
         self.assertAlmostEqual(search_planner.plan_fragility(plan, sc),
                                parts['tight'] + parts['near_pairs'] - gap)
         later = copy.deepcopy(plan)
@@ -422,15 +428,15 @@ class LnsTests(unittest.TestCase):
         self.assertIsNotNone(built)
         tasks, route = built
         # The kit's speed and observation offset: eco mode, no stretch.
-        saved = (search_planner.SCOUT_SPEED_MODE, search_planner.OBS_STRETCH,
-                 search_planner.DIAGONAL_CLIMB)
-        (search_planner.SCOUT_SPEED_MODE, search_planner.OBS_STRETCH,
-         search_planner.DIAGONAL_CLIMB) = "eco", False, False
+        saved = (CONFIG.scout_speed_mode, CONFIG.obs_stretch,
+                 CONFIG.diagonal_climb)
+        (CONFIG.scout_speed_mode, CONFIG.obs_stretch,
+         CONFIG.diagonal_climb) = "eco", False, False
         try:
             self.assertEqual(scout_tour(sc, scout, tasks, 70.0, 7.0), route)
         finally:
-            (search_planner.SCOUT_SPEED_MODE, search_planner.OBS_STRETCH,
-             search_planner.DIAGONAL_CLIMB) = saved
+            (CONFIG.scout_speed_mode, CONFIG.obs_stretch,
+             CONFIG.diagonal_climb) = saved
 
     def exact_search(self):
         search = Search(tour_scenario(), seconds=10)
@@ -444,7 +450,7 @@ class LnsTests(unittest.TestCase):
 
         def insert_best(state, contact):
             calls.append(state.seq + (contact.id,))
-            self.assertLessEqual(search.checker.stop, time.monotonic() + search_planner.EXACT_REINSERT_S)
+            self.assertLessEqual(search.checker.stop, time.monotonic() + CONFIG.exact_reinsert_s)
             seq = state.seq + (contact.id,)
             return NS(seq=seq, score=10.0 if seq == ('C', 'A', 'B') else float(len(seq)))
         search.insert_best = insert_best
@@ -509,8 +515,8 @@ class LnsTests(unittest.TestCase):
     def test_default_lns_share_grows_with_contact_count(self):
         small = Search(Scenario.from_dict(generate('L3', 0)), seconds=0.0)
         large = Search(Scenario.from_dict(generate('L4', 0)), seconds=0.0)
-        self.assertEqual(small.lns_share, LNS_SHARE)
-        self.assertEqual(large.lns_share, LNS_SHARE_LARGE)
+        self.assertEqual(small.lns_share, CONFIG.lns_share)
+        self.assertEqual(large.lns_share, CONFIG.lns_share_large)
 
     def test_destroy_operators_pick_served_contacts(self):
         sc = Scenario.from_dict(generate('L2', 3))
@@ -617,11 +623,11 @@ class ClimbTests(unittest.TestCase):
         tasks, _ = _Planner(sc)._add_observation(scout, contact, 70.0, 0.0, 7.0)
         tours = {}
         for diagonal in (False, True):
-            search_planner.DIAGONAL_CLIMB = diagonal
+            CONFIG.diagonal_climb = diagonal
             try:
                 tours[diagonal] = scout_tour(sc, scout, tasks, 70.0, depart=0.0)
             finally:
-                search_planner.DIAGONAL_CLIMB = True
+                CONFIG.diagonal_climb = True
         flat, diag = tours[False], tours[True]
         self.assertEqual((flat[1]['x'], flat[1]['y']), tuple(scout.home[:2]))
         self.assertNotEqual((diag[1]['x'], diag[1]['y']), tuple(scout.home[:2]))
@@ -687,7 +693,7 @@ class GroundStrikeTests(unittest.TestCase):
         # After the scout has landed (pads are 60 m apart, in line with the contact).
         arrive = max(obs_end + 15.0, tour[-1]['t'] + 60.0)
         ground, earliest = search_planner.effector_route(eff, target, arrive,
-                                                         search_planner.GROUND_Z, 0.0, sc)
+                                                         CONFIG.ground_z, 0.0, sc)
         self.assertEqual(len(ground), 2)
         self.assertEqual([w['z'] for w in ground], [0.0, 0.0])
         self.assertEqual(ground[-1]['action'], 'engage')
@@ -705,10 +711,10 @@ class GroundStrikeTests(unittest.TestCase):
         self.assertLess(energy(ground), energy(low) - eff.power.e_climb_wh_per_m * 29.0)
         # Too early for the straight line at cruise speed.
         self.assertIsNone(search_planner.effector_route(eff, target, earliest - 1.0,
-                                                        search_planner.GROUND_Z, 0.0, sc)[0])
+                                                        CONFIG.ground_z, 0.0, sc)[0])
         # Ground routes are straight: other approach angles add nothing.
         self.assertIsNone(search_planner.effector_route(eff, target, arrive,
-                                                        search_planner.GROUND_Z, 35.0, sc)[0])
+                                                        CONFIG.ground_z, 35.0, sc)[0])
 
     def test_blocked_ground_line_falls_back_to_the_30_m_route(self):
         data = json.loads(json.dumps({
@@ -719,19 +725,19 @@ class GroundStrikeTests(unittest.TestCase):
         eff = next(a for a in sc.aircraft if a.subtype == 'light')
         target = next(c for c in sc.contacts if c.id == 'B')
         self.assertIsNone(search_planner.ground_route(eff, target, 500.0, sc))
-        route, _ = search_planner.effector_route(eff, target, 500.0, search_planner.GROUND_Z,
+        route, _ = search_planner.effector_route(eff, target, 500.0, CONFIG.ground_z,
                                                  0.0, sc)
         self.assertGreater(len(route), 2)
         self.assertTrue(all(w['z'] >= 30.0 for w in route[1:-1]))
         self.assertEqual(ClimbTests().legs_ok(sc, {eff.id: route}), [])
 
     def test_layer_sets_follow_the_flag(self):
-        self.assertEqual(search_planner.effector_layer_sets()[0], (search_planner.GROUND_Z,))
-        search_planner.GROUND_STRIKES = False
+        self.assertEqual(search_planner.effector_layer_sets()[0], (CONFIG.ground_z,))
+        CONFIG.ground_strikes = False
         try:
             self.assertEqual(search_planner.effector_layer_sets(), search_planner.EFFECTOR_Z)
         finally:
-            search_planner.GROUND_STRIKES = True
+            CONFIG.ground_strikes = True
 
     def test_search_exports_valid_plans_with_ground_strikes(self):
         sc = scenario()
@@ -753,11 +759,11 @@ class ScoutRankTests(unittest.TestCase):
         contact = next(c for c in sc.contacts if c.id == 'A')
         ranked = [a.id for a in search.ranked_scouts(search.root, contact, False)]
         self.assertEqual(ranked[0], 'scout1')
-        search_planner.SCOUT_ENERGY_RANK = False
+        CONFIG.scout_energy_rank = False
         try:
             ranked = [a.id for a in search.ranked_scouts(search.root, contact, False)]
         finally:
-            search_planner.SCOUT_ENERGY_RANK = True
+            CONFIG.scout_energy_rank = True
         # By added distance only, the nearer pad wins.
         self.assertEqual(ranked[0], 'scout0')
 
@@ -926,13 +932,13 @@ class TripTests(unittest.TestCase):
 
     def test_lns_with_trip_operator_exports_valid_plans(self):
         sc = Scenario.from_dict(generate('L3', 4))
-        old = search_planner.TRIP_SHARE
-        search_planner.TRIP_SHARE = 0.6
+        old = CONFIG.trip_share
+        CONFIG.trip_share = 0.6
         try:
             search = Search(sc, seconds=5.0, lns_share=0.6)
             verified = search.run()
         finally:
-            search_planner.TRIP_SHARE = old
+            CONFIG.trip_share = old
         self.assertGreater(search.lns['trip_tried'], 0)
         self.assertIn('trip_improvements', search.report(verified)['lns'])
         for state, result in verified:
@@ -1039,8 +1045,8 @@ class GroupTests(unittest.TestCase):
 
     def test_group_move_keeps_plans_valid(self):
         s = self.search
-        old = search_planner.GROUP_SIZES
-        search_planner.GROUP_SIZES = (2, 3, 4)
+        old = CONFIG.group_sizes
+        CONFIG.group_sizes = (2, 3, 4)
         try:
             rng = random.Random(4)
             for _ in range(8):
@@ -1052,13 +1058,13 @@ class GroupTests(unittest.TestCase):
                 self.assertTrue(result.valid, [str(v) for v in result.violations][:3])
                 self.assertAlmostEqual(result.score, partial.score, places=6)
         finally:
-            search_planner.GROUP_SIZES = old
+            CONFIG.group_sizes = old
         self.assertGreater(s.lns['group_realised'], 0)
 
     def test_lns_with_group_operator_keeps_or_improves_valid_plans(self):
         sc = Scenario.from_dict(generate('L4', 10))
-        old = search_planner.GROUP_SIZES, search_planner.GROUP_SHARE, search_planner.TRIP_SHARE
-        search_planner.GROUP_SIZES, search_planner.GROUP_SHARE, search_planner.TRIP_SHARE = (2, 3), 0.8, 0.0
+        old = CONFIG.group_sizes, CONFIG.group_share, CONFIG.trip_share
+        CONFIG.group_sizes, CONFIG.group_share, CONFIG.trip_share = (2, 3), 0.8, 0.0
         try:
             search = Search(sc, seconds=10.0, lns_share=0.5)
             contacts, priorities = search.search_phase()
@@ -1066,7 +1072,7 @@ class GroupTests(unittest.TestCase):
             search.improve_phase(contacts, priorities)
             verified = search.finalize()
         finally:
-            search_planner.GROUP_SIZES, search_planner.GROUP_SHARE, search_planner.TRIP_SHARE = old
+            CONFIG.group_sizes, CONFIG.group_share, CONFIG.trip_share = old
         self.assertGreater(search.lns['group_tried'], 0)
         self.assertGreaterEqual(verified[0][1].score, before - 1e-6)
         self.assertIn('group_improvements', search.report(verified)['lns'])
@@ -1117,31 +1123,31 @@ class StrikeGroupTests(unittest.TestCase):
 
     def test_strike_operator_can_be_disabled(self):
         sc = Scenario.from_dict(generate('L3', 4))
-        old = search_planner.STRIKE_GROUP, search_planner.TRIP_SHARE, search_planner.GROUP_SHARE
-        search_planner.STRIKE_GROUP, search_planner.TRIP_SHARE, search_planner.GROUP_SHARE = False, 0.0, 0.0
+        old = CONFIG.strike_group, CONFIG.trip_share, CONFIG.group_share
+        CONFIG.strike_group, CONFIG.trip_share, CONFIG.group_share = False, 0.0, 0.0
         try:
             s = Search(sc, seconds=4.0, lns_share=0.5)
             verified = s.run()
         finally:
-            search_planner.STRIKE_GROUP, search_planner.TRIP_SHARE, search_planner.GROUP_SHARE = old
+            CONFIG.strike_group, CONFIG.trip_share, CONFIG.group_share = old
         self.assertEqual(s.lns['strike_tried'], 0)
         self.assertTrue(evaluate(sc, verified[0][0].plan(sc.seed)).valid)
 
     def test_move_time_cap_does_not_end_lns(self):
         sc = Scenario.from_dict(generate('L3', 4))
-        old = (search_planner.TRIP_SHARE, search_planner.GROUP_SHARE, search_planner.TOUR_SHARE,
-               search_planner.STRIKE_SHARE, Search.strike_move)
+        old = (CONFIG.trip_share, CONFIG.group_share, CONFIG.tour_share,
+               CONFIG.strike_share, Search.strike_move)
 
         def capped(self, current, rng):
             raise search_planner.DeadlineReached
-        search_planner.TRIP_SHARE = search_planner.GROUP_SHARE = search_planner.TOUR_SHARE = 0.0
-        search_planner.STRIKE_SHARE, Search.strike_move = 1.0, capped
+        CONFIG.trip_share = CONFIG.group_share = CONFIG.tour_share = 0.0
+        CONFIG.strike_share, Search.strike_move = 1.0, capped
         try:
             s = Search(sc, seconds=4.0, lns_share=0.5)
             verified = s.run()
         finally:
-            (search_planner.TRIP_SHARE, search_planner.GROUP_SHARE, search_planner.TOUR_SHARE,
-             search_planner.STRIKE_SHARE, Search.strike_move) = old
+            (CONFIG.trip_share, CONFIG.group_share, CONFIG.tour_share,
+             CONFIG.strike_share, Search.strike_move) = old
         self.assertGreater(s.lns['strike_tried'], 1)
         self.assertTrue(evaluate(sc, verified[0][0].plan(sc.seed)).valid)
 
