@@ -121,6 +121,27 @@ Generation and the external scoring calls are outside each planner's measured ru
 
 The safety change was kept as a requirement. A–G were not committed. Repeated runs of the same code differ by up to about 35 points in total, mostly on L4. Every change to strike or scout options lost 20–50 points on L4, even when L1 gained 12 points (A, D, E fix L1-74). Remaining R8 rejections on a diagnostic L4 run were mostly en route: effectors of one team converging on their target at the same layer, and effectors crossing scouts. Takeoffs from neighbouring pads were about 20%.
 
+### Scout-tour phase, tuning seeds 0–2 and 15–20, held-out seeds 30–45, 45 s
+
+These four changes were each committed and benchmarked against the previous commit on 36 tuning cases (`--workers 1 --seconds 45 --levels L1,L2,L3,L4 --seeds 0-2,15-20`). Run ids, per-level scores and the scout diagnosis are in [history/2026-11-21-phase1-scout-tours.md](history/2026-11-21-phase1-scout-tours.md). Every plan was valid, and the slowest planner process took 46.2 s.
+
+| Change | Tuning total | vs previous | Result |
+|---|---:|---:|---|
+| master `f737a2a` | 20366.11 | | |
+| 1. Beam expansion also tries the 2 cheapest insertion positions (no reordered tours) | 20523.23 | +157.12 | won on tuning |
+| 2. Scout fanout 6, fallback 10; candidates ranked by added distance plus a 30 s tight-slack penalty | 20575.53 | +52.30 | won on tuning |
+| 3. Two contacts observed from one shared point, one observe waypoint each (allowed by `valid_observation` and R1) | 20450.07 | −125.46 | reverted |
+| 4. Relocation and 2-opt polish of scout visit orders on each new best plan | 20475.98 | −48.19 vs a 20524.17 rerun of 2 | reverted |
+
+The held-out evaluation of Steps 1 + 2 on 64 cases (seeds 30–45) did not pass the gate:
+
+| Run | Total | L1 | L2 | L3 | L4 | Valid | Slowest s |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| master | 35044.05 | 1561.38 | 4054.16 | 8252.65 | 21175.86 | 64/64 | 45.85 |
+| Steps 1 + 2 | 34960.36 | 1561.29 | 4066.72 | 8286.54 | 21045.80 | 64/64 | 45.97 |
+
+Steps 1 and 2 were therefore reverted, and the planner is unchanged from master. Two runs of the same Step 2 code differed by 51 points, so the tuning gains were within run-to-run noise. `tests/test_exactness.py` checks that `IncrementalValidator` and the official validator agree on insertion, reorder and 2-opt/or-opt scout moves. It also checks that both report injected R1 (horizon), R3 (energy), R4, R6 and R8 violations.
+
 ### Phase 2 beam changes, held-out seeds 30–45, 45 s
 
 Each change was tuned on L1–L4 seeds 0–2 and 15–20 (36 cases). Changes that won were then checked once on held-out L1–L4 seeds 30–45 (64 cases), with `--workers 1` and 45 s. Run ids, tuning tables, per-case scores and the batch layout are in [history/2026-11-22-phase2-beam.md](history/2026-11-22-phase2-beam.md). Every plan was valid in every run. The slowest full planner process took 46.3 s.
@@ -134,7 +155,7 @@ Each change was tuned on L1–L4 seeds 0–2 and 15–20 (36 cases). Changes tha
 | Step 4: width 9 on Step 1 (width 6 + `widen`, width 4 + `widen`) | 20394.59 (20545.11, 20474.47) | 35168.81 (35143.40, 35061.38) | 1566.17 | 4050.29 | 8275.44 | 21276.91 | yes, width 9 |
 | **Final `phase2-heldout` run** (Step 1 + width 9, run alone) | | **35151.40** | 1566.17 | 4050.29 | 8280.52 | 21254.43 | |
 
-Final branch vs base on held-out: **+251.25** (+0.7 %). That gain is about twice the spread between runs of identical code: 169 points on tuning and about 100 on held-out, mostly from L4.
+Final branch vs base on held-out: **+251.25** (+0.7 %). The scout-tour phase measured the same base planner code on the same held-out seeds at 35044.05, so the gain over that run is +107.35. Runs of identical code differ by up to 169 points on tuning and up to 144 on held-out, mostly on L4. The gain is therefore only about one to two times the noise.
 
 - **Step 0 accounting.** `outranked` now has a sub-count, `beam_pruned`: valid serving children that the beam width cut. On L4 seeds 0–2, 11 contacts (514 pts) were outranked, and 5 of them (227 pts) had valid children cut by the beam. Over the 64 held-out cases, the base had 131 outranked contacts (88 beam-cut) and the final run had 124 (95).
 - **Step 2 lost** at both weights. The bound moves the beam toward states that keep resources free. Those states did not turn into better plans.
@@ -306,7 +327,7 @@ The most common attempt outcome is the reason. Ties go to the attempt that got f
 | `scout_rule:R3` | 3 | 163 |
 | `scout_rule:R8` | 3 | 153 |
 
-Scout failures account for 73 contacts and 3,756 points. A direct-flight check (`python3 analysis/scout_reach.py analysis/results/l4-unserved-diagnosis`) shows only 8 non-banned targets across the three scenarios that no scout can observe in time even flying straight from base at full speed (ignoring zones). Most scout failures therefore come from how tours are built (append-only, four nearest candidates), not from physics. `outranked` is the second lever: valid serves existed but the beam kept other branches. Time limits are a small factor (3 contacts). Collateral bans are unavailable points: they make "available points" totals look larger than what any plan can reach. Each L4 run completed 4–5 passes. The full run (report, scenarios, plans and logs) is committed in [analysis/results/l4-unserved-diagnosis/](analysis/results/l4-unserved-diagnosis/report.html).
+Scout failures account for 73 contacts and 3,756 points. These numbers come from older code. On master `f737a2a`, the same seeds score 3888.04, and only 3 contacts (228 points) fail on scouting: 2 at R3 and 1 at R4. Another 20 (1,156 points) miss on `scout_window`, including the 8 unreachable targets ([details](history/2026-11-21-phase1-scout-tours.md)). A direct-flight check (`python3 analysis/scout_reach.py analysis/results/l4-unserved-diagnosis`) shows only 8 non-banned targets across the three scenarios that no scout can observe in time even flying straight from base at full speed (ignoring zones). Most scout failures therefore come from how tours are built (append-only, four nearest candidates), not from physics. `outranked` is the second lever: valid serves existed but the beam kept other branches. Time limits are a small factor (3 contacts). Collateral bans are unavailable points: they make "available points" totals look larger than what any plan can reach. Each L4 run completed 4–5 passes. The full run (report, scenarios, plans and logs) is committed in [analysis/results/l4-unserved-diagnosis/](analysis/results/l4-unserved-diagnosis/report.html).
 
 A generated L2-7 demo is available locally at `output/search/tree.html`, with its winning fleet animation at `output/flight.html`. Generated outputs are ignored by Git; use `--artifacts` to reproduce them.
 
