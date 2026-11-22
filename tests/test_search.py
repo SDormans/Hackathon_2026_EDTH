@@ -853,6 +853,27 @@ class DiverseBeamTests(unittest.TestCase):
         self.assertEqual(len(search_planner.diverse_beam(ranked[:5], 4, diverse=2, extra=False)), 4)
         self.assertEqual(len(search_planner.diverse_beam(ranked[:2], 4, diverse=2)), 2)
 
+class BeamBoundTests(unittest.TestCase):
+    def test_rank_adds_free_effector_share_of_remaining_points(self):
+        from types import SimpleNamespace as NS
+        import beam
+        fake = NS(aircraft={'E1': NS(id='E1', type=beam.EFFECTOR), 'E2': NS(id='E2', type=beam.EFFECTOR),
+                            'S1': NS(id='S1', type='scout')})
+        order = [NS(points=30.0), NS(points=-5.0), NS(points=10.0)]
+        state = DiverseBeamTests.state(100.0, ['E1', 'S1'], [])
+        old = CONFIG.beam_bound
+        try:
+            CONFIG.beam_bound = 0.0
+            self.assertEqual(Search.bound_rank(fake, order)(state, 0), 100.0)
+            CONFIG.beam_bound = 0.5
+            rank = Search.bound_rank(fake, order)
+            self.assertAlmostEqual(rank(state, 0), 100.0 + 0.5 * 0.5 * 40.0)
+            self.assertAlmostEqual(rank(state, 2), 100.0 + 0.5 * 0.5 * 10.0)
+            self.assertAlmostEqual(rank(state, 3), 100.0)
+        finally:
+            CONFIG.beam_bound = old
+
+
 if __name__ == '__main__':
     unittest.main()
 
