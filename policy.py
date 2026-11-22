@@ -28,6 +28,11 @@ Coordination, using what every drone knows of its peers (plan + announced states
   effectors that strike that contact (until each is within half the estimated range for three sends,
   or a few far tries); effectors relay it to their partners. Before, the scout repeated it every
   second until the last planned strike plus 25 s, which was most of the traffic.
+- WINDOW_CAP (proceed rule): an effector engages only on a confirmation it holds: from the plan
+  when the observation ended before the cut, or from a heard O notice. Without one it holds short
+  until the grace (or a late scout's predicted observation) runs out, but never past its contact's
+  window end minus HOLD_LEAD_S, then returns. Engaging on the scout's *predicted* observation was
+  tried and rejected: silent scout failures and lost deviations made it break R4 in ~25 % of runs.
 - BOXED_NOMINAL: when no rate keeps the separation margin against every move a right-of-way peer
   may make, the rate with the most room against announced states is taken (worst case breaks ties),
   instead of the best worst case, which is often a near tie that points into the peer's actual path.
@@ -98,6 +103,8 @@ EXACT_OBS_END = True    # a scout reports its observation end from its route clo
 CONFIRM_SLACK_S = 0.1
 O_FORWARD = True        # "observed" notices go to the strike effectors that may lack them (store and forward),
                         # not every second until the strike; effectors relay them to their partners
+WINDOW_CAP = True       # an unconfirmed effector never holds short past its contact's window end minus
+                        # HOLD_LEAD_S (it could no longer serve), then returns; it never engages on a prediction
 BOXED_NOMINAL = True    # when no rate keeps the margin against every move a peer may make, pick the one
                         # with the most room against the peers' announced states (worst case breaks ties)
 
@@ -457,13 +464,16 @@ class Policy:
     def _grace_until(self, t):
         """How long an unconfirmed effector waits: the fixed grace, or longer for a scout known to be late."""
         until = self.engage_t + HOLD_GRACE_S
+        if WINDOW_CAP and self.window_end is not None:
+            until = min(until, max(self.engage_t, self.window_end - HOLD_LEAD_S))
         if not SCOUT_WAIT:
             return until
         for aid, tau_end in self.obs_wp.get(self.target, []):
             if aid in self.peer_state and self.peer_state[aid][1] >= 0.0:
                 until = max(until, self._peer_eta(aid, tau_end, t) + self.margin + SCOUT_WAIT_PAD_S)
         if self.window_end is not None:
-            until = min(until, max(self.engage_t + HOLD_GRACE_S, self.window_end))
+            cap = self.window_end - HOLD_LEAD_S if WINDOW_CAP else self.window_end
+            until = min(until, max(self.engage_t + (0.0 if WINDOW_CAP else HOLD_GRACE_S), cap))
         return until
 
     def _on_plan(self, t, tau, rate):
