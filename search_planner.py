@@ -1367,7 +1367,7 @@ def default_lns_share(scenario):
 
 
 class Search:
-    def __init__(self, scenario, seconds=45.0, top_n=5, beam_width=9, start=None, lns_share=0.4,
+    def __init__(self, scenario, seconds=45.0, top_n=5, beam_width=9, start=None, lns_share=None,
                  interleave=False, adaptive=False, restarts=True, widen=False,
                  scout_speed="fast", obs_stretch=True):
         if seconds < 0 or not 1 <= top_n <= 100 or not 1 <= beam_width <= 100:
@@ -1400,7 +1400,7 @@ class Search:
                     "trip_gain": 0.0, "trip_label_s": 0.0,
                     "group_tried": 0, "group_realised": 0, "group_accepted": 0,
                     "group_improvements": 0, "group_gain": 0.0, "group_label_s": 0.0,
-                    "group_sizes": {},
+                    "group_sizes": {}, "ops": {},
                     "strike_tried": 0, "strike_accepted": 0, "strike_improvements": 0,
                     "strike_gain": 0.0}
         self._trip_cache = {}

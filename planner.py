@@ -147,28 +147,11 @@ def main():
             save_tree(report, args.artifacts / "tree.html")
         print(json.dumps({key: report[key] for key in
                           ("elapsed_s", "passes", "lns", "trip_plan", "candidate_checks", "rejections",
-                           "unserved", "unserved_points", "contacts", "solutions", "errors")
+                           "unserved", "unserved_points", "fragility", "contacts", "solutions",
+                           "errors")
                           if key in report}), file=sys.stderr)
     except Exception:
         traceback.print_exc()
-    scenario = Scenario.from_dict(load_json(args.scenario))
-    search = Search(scenario, args.seconds, args.top_n, args.beam_width, START, args.lns_share,
-                    args.interleave, args.adaptive, args.restarts,
-                    scout_speed=args.scout_speed, obs_stretch=args.obs_stretch)
-    verified = search.run()
-    # Required output is written before optional diagnostics.
-    save_json(verified[0][0].plan(scenario.seed), args.plan)
-    report = search.report(verified)
-    if args.artifacts:
-        from tree_view import save_tree
-        args.artifacts.mkdir(parents=True, exist_ok=True)
-        for rank, (state, result) in enumerate(verified, 1):
-            save_json(state.plan(scenario.seed), args.artifacts / f"plan-{rank:02d}.json")
-        save_json(report, args.artifacts / "tree.json")
-        save_tree(report, args.artifacts / "tree.html")
-    print(json.dumps({key: report[key] for key in
-                      ("elapsed_s", "passes", "lns", "trip_plan", "candidate_checks", "rejections",
-                       "unserved", "unserved_points", "fragility", "contacts", "solutions") if key in report}), file=sys.stderr)
 
 
 if __name__ == "__main__":
