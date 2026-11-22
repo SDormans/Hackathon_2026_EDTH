@@ -310,7 +310,8 @@ def cmd_report(a):
     names = [r["variant"] for r in rows] if not a.variants else a.variants.split(",")
     rows = {r["variant"]: r for r in rows}
     cells = {n: load_cells(n) for n in names}
-    refs = [n for n in ("continue", "return") if n in cells]
+    ref_cells = {n: load_cells(n) for n in ("continue", "return") if n in rows}
+    refs = list(ref_cells)
     print("| Variant | Retention | Failures | Msgs/ac/min | S_loss | Grid failures | Sizing | Frontier | Beats continue+return from |")
     print("|---|---:|---:|---:|---:|---:|---:|---|---|")
     for n in names:
@@ -318,7 +319,7 @@ def cmd_report(a):
         beats = []
         for rng in RANGES:
             ok = [c for c in CAPACITIES if refs and float(cells[n][(rng, c)]["s_loss"]) > max(
-                float(cells[x][(rng, c)]["s_loss"]) for x in refs) and int(cells[n][(rng, c)]["failures"]) == 0]
+                float(ref_cells[x][(rng, c)]["s_loss"]) for x in refs) and int(cells[n][(rng, c)]["failures"]) == 0]
             beats.append(f"{rng:g}:{min(ok):g}" if ok else f"{rng:g}:-")
         print(f"| {n} | {float(r['lb_retention']):.3f} | {r['lb_failures']}/{r['lb_runs']} | "
               f"{float(r['lb_msgs_per_ac_min']):.2f} | {float(r['lb_s_loss']):.3f} | {r['grid_failures']}/{r['grid_runs']} | "
