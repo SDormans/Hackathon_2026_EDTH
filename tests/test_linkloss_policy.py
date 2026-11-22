@@ -40,6 +40,7 @@ class PolicyRuleTests(unittest.TestCase):
                 for seed in range(3):
                     r = simulate(sc, plan, events, self.factory, setting=setting, run_seed=seed)
                     self.assertFalse([f for f in r.failed if f.startswith('R4')], (setting, seed, r.failed))
+                    self.assertFalse([f for f in r.failed if 'policy error' in f], (setting, seed, r.failed))
 
     def test_hold_short_never_outlasts_the_window(self):
         sc, plan, _ = self.cases[0]

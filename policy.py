@@ -119,6 +119,12 @@ REVERSE_LOOK_S = 8.0    # a reversal must keep clear of on-schedule peers' next 
 STALE_CAP_S = 3.0       # route-time drift assumed at most for a silent off-plan peer
 ESCAPE_GAIN_M = 2.0     # with no clear move, leave a hold only for this much more distance
 HEARTBEAT_NEAR_M = 300.0  # an off-plan aircraft re-announces its state every second while a peer is this close
+O_FORWARD = True        # "observed" notices go to the strike effectors that may lack them (store and forward),
+                        # not every second until the strike; effectors relay them to their partners
+WINDOW_CAP = True       # an unconfirmed effector never holds short past its contact's window end minus
+                        # HOLD_LEAD_S (it could no longer serve), then returns; it never engages on a prediction
+BOXED_NOMINAL = True    # when no rate keeps the margin against every move a peer may make, pick the one
+                        # with the most room against the peers' announced states (worst case breaks ties)
 
 # ---------------------------------------------------------------------- compact wire format
 ALPHABET = "".join(chr(c) for c in range(32, 127) if chr(c) not in '"\\')
