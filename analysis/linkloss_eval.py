@@ -78,8 +78,9 @@ def _build(job):
 
 def build_cases(event_seeds, workers):
     """Returns [(label, scenario, plan, events, v_oracle)], cached under output/ by inputs."""
-    key = hashlib.sha256(json.dumps([[p.name, p.read_bytes().hex()[:64]] for p in VALIDATION]
-                                    + [event_seeds, str(_kit.KIT)]).encode()).hexdigest()[:12]
+    kit_src = sorted(Path(_kit.KIT, "fleetkit").rglob("*.py"))
+    key = hashlib.sha256(json.dumps([[p.name, hashlib.sha256(p.read_bytes()).hexdigest()] for p in VALIDATION + kit_src]
+                                    + [event_seeds]).encode()).hexdigest()[:12]
     cache = CACHE / f"cases-{key}.pkl.gz"
     if cache.exists():
         with gzip.open(cache, "rb") as fh:
