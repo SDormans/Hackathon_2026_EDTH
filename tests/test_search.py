@@ -256,6 +256,8 @@ class SearchTests(unittest.TestCase):
             report = json.loads((work / 'artifacts/tree.json').read_text())
             self.assertTrue((work / 'artifacts/tree.html').exists())
             self.assertTrue(report['solutions'])
+            self.assertGreater(report['solutions'][0]['score'], 0)
+            self.assertAlmostEqual(evaluate(parsed, plan).score, report['solutions'][0]['score'], places=6)
             for p in (work / 'artifacts').glob('plan-*.json'):
                 self.assertTrue(evaluate(parsed, json.loads(p.read_text())).valid)
 
