@@ -14,7 +14,7 @@ For a shorter run with five candidate plans and the tree:
 
 ```sh
 python3 planner.py path/to/scenario.json output/plan.json \
-  --seconds 5 --top-n 5 --beam-width 6 --lns-share 0.4 --artifacts output/search
+  --seconds 5 --top-n 5 --beam-width 9 --lns-share 0.4 --artifacts output/search
 ```
 
 Open `output/search/tree.html` in a browser. Drag to pan, scroll to zoom, click nodes to inspect decisions, and click a ranked solution to highlight its path. The directory also contains `tree.json` with parent links, decisions, scores and rejection counts, plus `plan-01.json`, `plan-02.json`, etc. These are ordinary plans accepted by the official validator. There may be fewer than N if the run finds fewer distinct valid plans.
@@ -167,6 +167,26 @@ The held-out evaluation of Steps 1 + 2 on 64 cases (seeds 30–45) did not pass 
 
 Steps 1 and 2 were therefore reverted, and the planner is unchanged from master. Two runs of the same Step 2 code differed by 51 points, so the tuning gains were within run-to-run noise. `tests/test_exactness.py` checks that `IncrementalValidator` and the official validator agree on insertion, reorder and 2-opt/or-opt scout moves. It also checks that both report injected R1 (horizon), R3 (energy), R4, R6 and R8 violations.
 
+### Phase 2 beam changes, held-out seeds 30–45, 45 s
+
+Each change was tuned on L1–L4 seeds 0–2 and 15–20 (36 cases). Changes that won were then checked once on held-out L1–L4 seeds 30–45 (64 cases), with `--workers 1` and 45 s. Run ids, tuning tables, per-case scores and the batch layout are in [history/2026-11-22-phase2-beam.md](history/2026-11-22-phase2-beam.md). Every plan was valid in every run. The slowest full planner process took 46.3 s.
+
+| Change | Tuning total | Held-out total | L1 | L2 | L3 | L4 | Kept |
+|---|---:|---:|---:|---:|---:|---:|---|
+| Base (width 6) | 20576.39 / 20407.16 | 34900.15 | 1561.38 | 4053.90 | 8246.78 | 21038.09 | |
+| Step 1: `BEAM_DIVERSE = 3` beam slots for states with a new used/served set | 20511.45 | 35086.54 | 1566.17 | 4054.41 | 8261.76 | 21204.21 | yes |
+| Step 2: rank by score + optimistic bound, weight 1.0 (0.5) | 20438.70 (20564.53) | 35052.77 (35067.98) | 1566.17 | 4058.95 | 8265.67 | 21161.98 | no |
+| Step 3: one non-improving child if its score + bound beats the parent's | 20517.91 | 35151.93 | 1566.17 | 4058.95 | 8267.72 | 21259.10 | no (never fires) |
+| Step 4: width 9 on Step 1 (width 6 + `widen`, width 4 + `widen`) | 20394.59 (20545.11, 20474.47) | 35168.81 (35143.40, 35061.38) | 1566.17 | 4050.29 | 8275.44 | 21276.91 | yes, width 9 |
+| **Final `phase2-heldout` run** (Step 1 + width 9, run alone) | | **35151.40** | 1566.17 | 4050.29 | 8280.52 | 21254.43 | |
+
+Final branch vs base on held-out: **+251.25** (+0.7 %). The scout-tour phase measured the same base planner code on the same held-out seeds at 35044.05, so the gain over that run is +107.35. Runs of identical code differ by up to 169 points on tuning and up to 144 on held-out, mostly on L4. The gain is therefore only about one to two times the noise.
+
+- **Step 0 accounting.** `outranked` now has a sub-count, `beam_pruned`: valid serving children that the beam width cut. On L4 seeds 0–2, 11 contacts (514 pts) were outranked, and 5 of them (227 pts) had valid children cut by the beam. Over the 64 held-out cases, the base had 131 outranked contacts (88 beam-cut) and the final run had 124 (95).
+- **Step 2 lost** at both weights. The bound moves the beam toward states that keep resources free. Those states did not turn into better plans.
+- **Step 3 never fires.** A non-improving child uses at least as many resources as its parent, so its optimistic bound is never higher. Of 4,078 non-improving children over 3 probe cases, none passed the gate. The looser gate (child score + bound > parent score) tied on tuning (20517.6) and was not run on held-out.
+- **Width 9 won on held-out** in both sweeps, but lost on tuning L4 on the Step 1 code. It was picked on the held-out total, as the plan requires. `widen` (width × 1.5 from pass 4) was second in both held-out sweeps and stays off.
+
 ### LNS batch result
 
 Both planners ran at full budget under the same load, four workers each at the same time, alongside greedy. Seeds 3–5 were not used during development. The validation scenarios ran 16 planners at the same time on eight cores; the greedy total comes from PLAN.md. `--lns-share 0.6` scored 4391.13 on the seeds 3–5 batch, within run-to-run noise of the default.
@@ -315,6 +335,8 @@ Every run records, for each hostile and unknown contact, how far each attempt to
 | `scout_rule:Rn` / `strike_rule:Rn` | The scout or strike routes failed official rule Rn. |
 | `not_improving` | A valid serve existed but did not raise the score. |
 | `outranked` | A valid serve existed in some branch, but that branch did not win. |
+
+The per-contact `beam_pruned` count (in `tree.json`/diagnostics) records valid serving children cut by the beam width. Contact summaries report `outranked_beam_pruned`: outranked contacts with at least one such child.
 
 The most common attempt outcome is the reason. Ties go to the attempt that got furthest.
 

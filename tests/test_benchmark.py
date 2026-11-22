@@ -90,6 +90,17 @@ class SummaryTests(unittest.TestCase):
         self.assertEqual(unknown['unserved_points']['scout_rule:R8'], 10)
         self.assertIsNone(bench.contact_summary([])['by_class']['unknown']['scout_failure_rate_pct'])
 
+    def test_outranked_beam_pruned_bucket(self):
+        row = self.row(1, 2)
+        row['diagnostics'] = {'contacts': {
+            'H1': dict(cls='hostile', points=10, served=False, reason='outranked', beam_pruned=3),
+            'H2': dict(cls='hostile', points=20, served=False, reason='outranked', beam_pruned=0),
+            'H3': dict(cls='hostile', points=5, served=True, beam_pruned=2)}}
+        hostile = bench.contact_summary([row])['by_class']['hostile']
+        self.assertEqual(hostile['outranked_beam_pruned'], 1)
+        self.assertEqual(hostile['outranked_beam_pruned_points'], 10)
+        self.assertEqual(hostile['beam_pruned_children'], 5)
+
     def test_gain_uses_summed_scores(self):
         s = bench.summarize([self.row(1, 2), self.row(100, 100)])
         self.assertAlmostEqual(s['improvement_pct'], 100/101)
