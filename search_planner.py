@@ -11,6 +11,7 @@ import itertools
 import math
 import random
 import time
+import traceback
 
 from fleetkit import baseline
 from fleetkit.baseline import (_Planner, _effector_route, _scout_route, EFFECTOR_LAYERS,
@@ -1386,7 +1387,8 @@ class Search:
         # Includes input reading when the CLI passes its process start time.
         self.stop = self.start + min(seconds, 55.0)
         # Final official validation starts no new call after this; 50 s at the default budget.
-        self.validate_stop = min(self.start + 58.0, self.stop + 5.0)
+        # Never after 56.5 s: planner.py's watchdog exports the empty plan at 57 s.
+        self.validate_stop = min(self.start + 56.5, self.stop + 5.0)
         self.top_n, self.width = top_n, beam_width
         # The beam ends early so the final share of the budget repairs its best plan.
         self.beam_stop = self.stop - lns_share * max(0.0, self.stop - self.start)
@@ -1423,6 +1425,8 @@ class Search:
         self.passes = 0
         # Per-contact attempt accounting for "why was this contact not served".
         self.attempts = {}
+        # Tracebacks of errors caught by run(); a robust run has none.
+        self.errors = []
 
     def stats(self, cid):
         if cid not in self.attempts:
@@ -1448,8 +1452,10 @@ class Search:
     def warm_start(self):
         stop = min(self.stop, self.start + min(10.0, max(0.0, (self.stop-self.start)*0.25)))
         p = WarmPlanner(self.sc, self.checker, self.root, stop)
-        contacts = (sorted((c for c in self.sc.contacts if c.cls == HOSTILE), key=lambda c: -c.points)
-                    + sorted((c for c in self.sc.contacts if c.cls == UNKNOWN), key=lambda c: -c.points))
+        # Contacts without a window can never be served (R9); the kit's greedy assumes one.
+        timed = [c for c in self.sc.contacts if c.window is not None]
+        contacts = (sorted((c for c in timed if c.cls == HOSTILE), key=lambda c: -c.points)
+                    + sorted((c for c in timed if c.cls == UNKNOWN), key=lambda c: -c.points))
         for depth, c in enumerate(contacts, 1):
             self.checker.check_time(stop)
             accepted = p.serve_hostile(c) if c.cls == HOSTILE else p.serve_unknown(c)
@@ -1880,9 +1886,18 @@ class Search:
         return True
 
     def run(self):
-        contacts, priorities = self.search_phase()
-        self.improve_phase(contacts, priorities)
-        return self.finalize()
+        # An unexpected error ends the search but not the run: finalize() exports the best
+        # archived plan that the official scorer accepts, else the empty plan.
+        try:
+            contacts, priorities = self.search_phase()
+            self.improve_phase(contacts, priorities)
+        except Exception:
+            self.errors.append(traceback.format_exc())
+        try:
+            return self.finalize()
+        except Exception:
+            self.errors.append(traceback.format_exc())
+            return [(self.root, evaluate(self.sc, self.root.plan(self.sc.seed)))]
 
     def search_phase(self):
         """Warm start plus beam passes until the beam deadline.
@@ -2597,6 +2612,7 @@ class Search:
                                                 "restarts": self.restarts},
                         **({"weights": dict(self.weights)} if self.adaptive else {})},
                 "trip_plan": dict(self.trip_stats),
+                "errors": list(self.errors),
                 "unserved": diagnostics["unserved"],
                 "unserved_points": diagnostics["unserved_points"],
                 "contacts": diagnostics["contacts"],

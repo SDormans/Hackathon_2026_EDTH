@@ -56,6 +56,8 @@ Each node holds routes, scout tasks, consumed effectors and a score. At each con
 - The beam keeps at most `--beam-width` distinct states at a depth. A separate archive keeps up to `--top-n` distinct valid plans across the entire search. The two settings are independent. Distinct means different assignments or timed waypoints, so solutions may serve the same contacts.
 - When the beam phase ends, a greedy **repair** pass fills the best plan: unserved unknowns, then hostiles, are inserted at the cheapest scout-tour positions with the free effectors (at most 0.25 s per contact and a quarter of the LNS share). LNS then starts from the best archived plan.
 - Route builders reuse memoised zone detours, and candidates whose waypoints fall outside the horizon or a contact's window are rejected before parsing. Duplicate plans are detected from per-route waypoint tuples.
+- The last `--lns-share` of the budget (default 0.4) runs LNS on the best plan. Each iteration removes 1–4 served contacts, chosen at random or as neighbours of a random contact, rebuilding the affected scout tour from its original departure. It then tries to reinsert the removed contacts, their six nearest unserved neighbours and three random unserved contacts. Each scout visit is tried at the three cheapest tour positions (added distance), and the best valid child per contact is kept. Worse plans are sometimes accepted, with a temperature of 1% of the best score falling to zero. After 25 iterations without a new best, the search restarts from a random plan in the top-N archive (`--no-restarts` returns to the best plan instead) and stops after 400 iterations without a new best. Accepted plans enter the archive, so they receive the same final official validation.
+- Expansion has local time caps, preventing an impossible contact from consuming the whole run. Children must improve the parent's actual score. All archive winners receive a full official validation and score before export; final validation starts no new call 5 s after the search deadline (50 s at the default 45 s budget, at most 56.5 s). The valid empty plan is the last fallback.
 - The last `--lns-share` of the budget runs LNS on the best plan. The default is 0.4, or 0.6 when the scenario has at least 40 hostile+unknown contacts (`LNS_SHARE`, `LNS_SHARE_LARGE`, `LNS_LARGE_CONTACTS`). Each iteration removes 1–4 served contacts, chosen at random or as neighbours of a random contact, rebuilding the affected scout tour from its original departure. In 10% of iterations (`TOUR_SHARE`) the removed contacts come from one scout tour, and half of those (`TOUR_REBUILD`) clear the whole tour and rebuild it by insertion. It then tries to reinsert the removed contacts, their six nearest unserved neighbours and three random unserved contacts. Each scout visit is tried at the three cheapest tour positions (added distance), and the best valid child per contact is kept. Worse plans are sometimes accepted, with a temperature of 1% of the best score falling to zero. After 25 iterations without a new best, the search restarts from a random plan in the top-N archive (`--no-restarts` returns to the best plan instead) and stops after 400 iterations without a new best. Accepted plans enter the archive, so they receive the same final official validation.
 - Expansion has local time caps, preventing an impossible contact from consuming the whole run. Children must improve the parent's actual score. All archive winners receive a full official validation and score before export; final validation starts no new call 5 s after the search deadline (50 s at the default 45 s budget, at most 58 s). The valid empty plan is the last fallback.
 
@@ -72,6 +74,38 @@ python3 analysis/benchmark_search.py --levels L1,L2,L3,L4 --seeds 0-4 --workers 
 ```
 
 Tests compare incremental validation with the full official validator on perturbed routes, check conflicts with existing aircraft and broken earlier confirmations, verify branch independence, and demonstrate a skip branch beating greedy allocation. A subprocess test copies only the hand-in modules and checks the CLI and exported plans.
+
+### Robustness checks
+
+The invariant: `planner.py` exits 0 within 60 s and exports a plan the official validator accepts (possibly empty) for any scenario. Three guards back this up beyond the search's own deadlines:
+
+- `Search.run()` catches an unexpected error in the search phases, records its traceback in the report's `errors`, and still exports the best archived plan that passes official validation (else the empty plan).
+- `planner.py` writes the empty plan if the scenario cannot be loaded or the search raises, and a watchdog thread writes the empty plan and exits at 57 s if no plan has been written. The plan file is written atomically (temporary file, then rename).
+- Final validation starts no new call after 56.5 s (50 s at the default budget), before the watchdog.
+
+```sh
+# Generated sweep (scenarios/robust/ is ignored; regenerate it first)
+for L in L1 L2 L3 L4; do for s in $(seq 50 60); do
+  python3 -m fleetkit generate $L $s -o scenarios/robust/$L-$s.json; done; done
+python3 analysis/robust_sweep.py scenarios/robust/*.json --seconds 45 --workers 4
+# Degenerate scenarios (written to tests/fixtures/robust/) and fuzzing
+python3 analysis/degenerate_scenarios.py
+python3 analysis/robust_sweep.py tests/fixtures/robust/*.json --seconds 45 --workers 3
+python3 analysis/fuzz_scenarios.py --levels L1,L2,L3,L4 --seed 50 --cases 50 --seconds 15 --workers 4
+```
+
+A case fails on a nonzero exit, a wall time above 60 s, a missing or invalid plan, or a caught internal error. `tests/test_robustness.py` runs every fixture at a 5 s budget and injects a crash and a hang to exercise the fallbacks.
+
+Results (8-core VM, 3–4 parallel workers):
+
+| Set | Cases | Budget | Failures | Empty plans | Slowest wall |
+|---|---|---|---|---|---|
+| Generated L1–L4, seeds 50–60 | 44 | 45 s | 0 | 0 | 45.9 s (L4) |
+| Degenerate + fuzz fixtures | 21 | 45 s | 0 | 12 (expected) | 37.6 s |
+| Fuzz, base seed 50 | 200 + 12 | 15 s / 45 s | 0 | 0 | 45.8 s |
+| Fuzz, base seed 51 | 100 + 4 | 15 s / 45 s | 0 | 0 | 45.4 s |
+
+The one bug found: hostile or unknown contacts without a time window crashed the warm start (the kit's greedy indexes the window). The warm start now skips them; R9 makes them unservable anyway. The generator never omits windows, so scores do not change.
 
 ### Batch benchmarks
 
