@@ -1400,7 +1400,7 @@ class Search:
                     "trip_gain": 0.0, "trip_label_s": 0.0,
                     "group_tried": 0, "group_realised": 0, "group_accepted": 0,
                     "group_improvements": 0, "group_gain": 0.0, "group_label_s": 0.0,
-                    "group_sizes": {},
+                    "group_sizes": {}, "ops": {},
                     "strike_tried": 0, "strike_accepted": 0, "strike_improvements": 0,
                     "strike_gain": 0.0, "ops": {}}
         self._trip_cache = {}
