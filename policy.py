@@ -722,7 +722,7 @@ class Policy:
         worst = math.inf
         hold_on_plan = rate == 0.0 and abs(tau - t) <= ON_PLAN_S
         for aid, reach in near:
-            if self._peer_on_plan(aid, t) and (trusted or hold_on_plan) and FORMATION_M > 0.0:
+            if self._peer_on_plan(aid, t) and (trusted or hold_on_plan) and FORMATION_M > 0.0 and not nominal:
                 blocked = self._peer_blocked(aid, t, near)
                 if hold_on_plan and blocked:
                     # if it does stop we are held at the same route time, as planned; if my guess is

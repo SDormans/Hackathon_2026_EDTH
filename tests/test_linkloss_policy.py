@@ -59,6 +59,21 @@ class PolicyRuleTests(unittest.TestCase):
         self.assertEqual(set(p.news[('O', c)]['audience']), set(p.strikers[c]) - {p.id})
 
 
+    def test_nominal_check_keeps_on_schedule_peers_moving(self):
+        # the no-safe-move fallback ranks options by the peers' nominal motion; a formation peer
+        # guessed blocked must not be assumed to stop there (L4-402, 500 m: S05/S13 at 39 m)
+        sc, plan, _ = self.cases[0]
+        ids = sorted(parse_plan(plan)[0])
+        p = self.factory(sc, plan, ids[0])
+        peer = next(a for a in ids[1:] if p.peers[a][1] is None or p.peers[a][1] != p.target)
+        t = (p.clock.start + p.clock.end) / 2.0
+        here = p.clock.position(t)
+        far = [tuple(c + 5000.0 for c in here)]
+        p._peer_on_plan = lambda aid, now: True
+        p._peer_blocked = lambda aid, now, near: True
+        p._polyline_point = lambda aid, now: [here]
+        self.assertGreater(p._step_worst(t, t, 1.0, [(peer, far)], nominal=True), 1000.0)
+
 class HarnessCliTests(unittest.TestCase):
     def test_eval_harness_exposes_run_and_report(self):
         for cmd in ('run', 'report'):
