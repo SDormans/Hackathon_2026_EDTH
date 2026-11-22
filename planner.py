@@ -4,9 +4,12 @@ Standard library only. Optional search diagnostics: --artifacts output/search.
 """
 import argparse
 import json
+import os
 from pathlib import Path
 import sys
+import threading
 import time
+import traceback
 
 # Start before input parsing/imports so they count against the search budget.
 START = time.monotonic()
@@ -29,6 +32,59 @@ except ModuleNotFoundError:
 from fleetkit.model import Scenario, load_json, save_json
 from search_planner import Search
 
+# The organisers kill the process at 60 s. If the plan is not written by then (a slow machine,
+# an unforeseen slow path), a watchdog writes the empty plan, which is always valid, and exits.
+HARD_LIMIT_S = 57.0
+
+
+class PlanWriter:
+    """Writes the plan once, atomically, from the main thread or the watchdog."""
+
+    def __init__(self, path, seed):
+        self.path, self.seed = Path(path), seed
+        self.lock = threading.Lock()
+        self.done = False
+
+    def write(self, plan, wait=-1):
+        # After `wait` seconds the watchdog writes without the lock, so a stalled main-thread
+        # write cannot hold it past the limit. Each thread writes its own temporary file.
+        locked = self.lock.acquire(timeout=wait)
+        try:
+            if self.done:
+                return False
+            tmp = self.path.with_name(f"{self.path.name}.{threading.get_ident()}.tmp")
+            save_json(plan, tmp)
+            os.replace(tmp, self.path)
+            self.done = True
+            return True
+        finally:
+            if locked:
+                self.lock.release()
+
+    def write_empty(self, wait=-1):
+        return self.write({"seed": self.seed, "routes": []}, wait)
+
+
+def start_watchdog(writer, deadline):
+    def fire():
+        try:
+            if writer.write_empty(wait=1.0):
+                print("planner: hard deadline reached, wrote the empty plan", file=sys.stderr)
+        finally:
+            sys.stderr.flush()
+            os._exit(0)
+    timer = threading.Timer(max(0.0, deadline - time.monotonic()), fire)
+    timer.daemon = True
+    timer.start()
+    return timer
+
+
+def scenario_seed(path):
+    try:
+        return load_json(path).get("seed")
+    except Exception:
+        return None
+
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
@@ -41,8 +97,9 @@ def main():
                         help="search deadline including startup (default 45, capped at 55 seconds)")
     parser.add_argument("--top-n", type=int, default=5)
     parser.add_argument("--beam-width", type=int, default=9)
-    parser.add_argument("--lns-share", type=float, default=0.4,
-                        help="final share of the search budget spent repairing the best plan (0..1)")
+    parser.add_argument("--lns-share", type=float, default=None,
+                        help="final share of the search budget spent repairing the best plan (0..1; "
+                             "default 0.4, or 0.6 with at least 40 hostile+unknown contacts)")
     parser.add_argument("--interleave", action="store_true",
                         help="alternate beam passes with LNS bursts instead of LNS only at the end")
     parser.add_argument("--adaptive", action="store_true",
@@ -61,8 +118,39 @@ def main():
     args = parser.parse_args()
     if not 0 <= args.seconds <= 55 or not 1 <= args.top_n <= 100 or not 1 <= args.beam_width <= 100:
         parser.error("seconds must be 0..55; top-n and beam-width must be 1..100")
-    if not 0 <= args.lns_share <= 1:
+    if args.lns_share is not None and not 0 <= args.lns_share <= 1:
         parser.error("lns-share must be 0..1")
+    writer = PlanWriter(args.plan, scenario_seed(args.scenario))
+    start_watchdog(writer, START + HARD_LIMIT_S)
+    try:
+        scenario = Scenario.from_dict(load_json(args.scenario))
+        writer.seed = scenario.seed
+        search = Search(scenario, args.seconds, args.top_n, args.beam_width, START, args.lns_share,
+                        args.interleave, args.adaptive, args.restarts,
+                        scout_speed=args.scout_speed, obs_stretch=args.obs_stretch)
+        verified = search.run()
+        # Required output is written before optional diagnostics.
+        writer.write(verified[0][0].plan(scenario.seed))
+    except Exception:
+        # The empty plan is valid for any scenario; a crash scores zero anyway.
+        traceback.print_exc()
+        writer.write_empty()
+        return
+    try:
+        report = search.report(verified)
+        if args.artifacts:
+            from tree_view import save_tree
+            args.artifacts.mkdir(parents=True, exist_ok=True)
+            for rank, (state, result) in enumerate(verified, 1):
+                save_json(state.plan(scenario.seed), args.artifacts / f"plan-{rank:02d}.json")
+            save_json(report, args.artifacts / "tree.json")
+            save_tree(report, args.artifacts / "tree.html")
+        print(json.dumps({key: report[key] for key in
+                          ("elapsed_s", "passes", "lns", "trip_plan", "candidate_checks", "rejections",
+                           "unserved", "unserved_points", "contacts", "solutions", "errors")
+                          if key in report}), file=sys.stderr)
+    except Exception:
+        traceback.print_exc()
     scenario = Scenario.from_dict(load_json(args.scenario))
     search = Search(scenario, args.seconds, args.top_n, args.beam_width, START, args.lns_share,
                     args.interleave, args.adaptive, args.restarts,
@@ -80,7 +168,7 @@ def main():
         save_tree(report, args.artifacts / "tree.html")
     print(json.dumps({key: report[key] for key in
                       ("elapsed_s", "passes", "lns", "trip_plan", "candidate_checks", "rejections",
-                       "unserved", "unserved_points", "contacts", "solutions") if key in report}), file=sys.stderr)
+                       "unserved", "unserved_points", "fragility", "contacts", "solutions") if key in report}), file=sys.stderr)
 
 
 if __name__ == "__main__":

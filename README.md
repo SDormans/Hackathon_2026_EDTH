@@ -57,7 +57,11 @@ Each node holds routes, scout tasks, consumed effectors and a score. At each con
 - When the beam phase ends, a greedy **repair** pass fills the best plan: unserved unknowns, then hostiles, are inserted at the cheapest scout-tour positions with the free effectors (at most 0.25 s per contact and a quarter of the LNS share). LNS then starts from the best archived plan.
 - Route builders reuse memoised zone detours, and candidates whose waypoints fall outside the horizon or a contact's window are rejected before parsing. Duplicate plans are detected from per-route waypoint tuples.
 - The last `--lns-share` of the budget (default 0.4) runs LNS on the best plan. Each iteration removes 1–4 served contacts, chosen at random or as neighbours of a random contact, rebuilding the affected scout tour from its original departure. It then tries to reinsert the removed contacts, their six nearest unserved neighbours and three random unserved contacts. Each scout visit is tried at the three cheapest tour positions (added distance), and the best valid child per contact is kept. Worse plans are sometimes accepted, with a temperature of 1% of the best score falling to zero. After 25 iterations without a new best, the search restarts from a random plan in the top-N archive (`--no-restarts` returns to the best plan instead) and stops after 400 iterations without a new best. Accepted plans enter the archive, so they receive the same final official validation.
+- Expansion has local time caps, preventing an impossible contact from consuming the whole run. Children must improve the parent's actual score. All archive winners receive a full official validation and score before export; final validation starts no new call 5 s after the search deadline (50 s at the default 45 s budget, at most 56.5 s). The valid empty plan is the last fallback.
+- The last `--lns-share` of the budget runs LNS on the best plan. The default is 0.4, or 0.6 when the scenario has at least 40 hostile+unknown contacts (`LNS_SHARE`, `LNS_SHARE_LARGE`, `LNS_LARGE_CONTACTS`). Each iteration removes 1–4 served contacts, chosen at random or as neighbours of a random contact, rebuilding the affected scout tour from its original departure. In 10% of iterations (`TOUR_SHARE`) the removed contacts come from one scout tour, and half of those (`TOUR_REBUILD`) clear the whole tour and rebuild it by insertion. It then tries to reinsert the removed contacts, their six nearest unserved neighbours and three random unserved contacts. Each scout visit is tried at the three cheapest tour positions (added distance), and the best valid child per contact is kept. Worse plans are sometimes accepted, with a temperature of 1% of the best score falling to zero. After 25 iterations without a new best, the search restarts from a random plan in the top-N archive (`--no-restarts` returns to the best plan instead) and stops after 400 iterations without a new best. Accepted plans enter the archive, so they receive the same final official validation.
 - Expansion has local time caps, preventing an impossible contact from consuming the whole run. Children must improve the parent's actual score. All archive winners receive a full official validation and score before export; final validation starts no new call 5 s after the search deadline (50 s at the default 45 s budget, at most 58 s). The valid empty plan is the last fallback.
+
+The planner is deliberately **single-process**. The grading machine's core count is unknown. Starting `multiprocessing` workers and pickling `Scenario`/`State` objects would use seconds of the 45 s budget. A worker spawn failure on the grader would score 0. The expected gain does not justify that risk, so parallel search is not implemented.
 
 The result is the best N plans **found**, not a proof of the global top N. Contact ordering, a bounded beam, fixed flight settings, shortlists and the improving-child restriction can all discard useful alternatives. The trace records accepted nodes and skip branches; failed route attempts are aggregated by rule, rather than stored individually. Trace growth is capped between passes to keep tiny scenarios from producing unlimited diagnostics.
 
@@ -70,6 +74,38 @@ python3 analysis/benchmark_search.py --levels L1,L2,L3,L4 --seeds 0-4 --workers 
 ```
 
 Tests compare incremental validation with the full official validator on perturbed routes, check conflicts with existing aircraft and broken earlier confirmations, verify branch independence, and demonstrate a skip branch beating greedy allocation. A subprocess test copies only the hand-in modules and checks the CLI and exported plans.
+
+### Robustness checks
+
+The invariant: `planner.py` exits 0 within 60 s and exports a plan the official validator accepts (possibly empty) for any scenario. Three guards back this up beyond the search's own deadlines:
+
+- `Search.run()` catches an unexpected error in the search phases, records its traceback in the report's `errors`, and still exports the best archived plan that passes official validation (else the empty plan).
+- `planner.py` writes the empty plan if the scenario cannot be loaded or the search raises, and a watchdog thread writes the empty plan and exits at 57 s if no plan has been written. The plan file is written atomically (temporary file, then rename).
+- Final validation starts no new call after 56.5 s (50 s at the default budget), before the watchdog.
+
+```sh
+# Generated sweep (scenarios/robust/ is ignored; regenerate it first)
+for L in L1 L2 L3 L4; do for s in $(seq 50 60); do
+  python3 -m fleetkit generate $L $s -o scenarios/robust/$L-$s.json; done; done
+python3 analysis/robust_sweep.py scenarios/robust/*.json --seconds 45 --workers 4
+# Degenerate scenarios (written to tests/fixtures/robust/) and fuzzing
+python3 analysis/degenerate_scenarios.py
+python3 analysis/robust_sweep.py tests/fixtures/robust/*.json --seconds 45 --workers 3
+python3 analysis/fuzz_scenarios.py --levels L1,L2,L3,L4 --seed 50 --cases 50 --seconds 15 --workers 4
+```
+
+A case fails on a nonzero exit, a wall time above 60 s, a missing or invalid plan, or a caught internal error. `tests/test_robustness.py` runs every fixture at a 5 s budget and injects a crash and a hang to exercise the fallbacks.
+
+Results (8-core VM, 3–4 parallel workers):
+
+| Set | Cases | Budget | Failures | Empty plans | Slowest wall |
+|---|---|---|---|---|---|
+| Generated L1–L4, seeds 50–60 | 44 | 45 s | 0 | 0 | 45.9 s (L4) |
+| Degenerate + fuzz fixtures | 21 | 45 s | 0 | 12 (expected) | 37.6 s |
+| Fuzz, base seed 50 | 200 + 12 | 15 s / 45 s | 0 | 0 | 45.8 s |
+| Fuzz, base seed 51 | 100 + 4 | 15 s / 45 s | 0 | 0 | 45.4 s |
+
+The one bug found: hostile or unknown contacts without a time window crashed the warm start (the kit's greedy indexes the window). The warm start now skips them; R9 makes them unservable anyway. The generator never omits windows, so scores do not change.
 
 ### Batch benchmarks
 
@@ -101,6 +137,39 @@ Open the printed `report.html` path to inspect the same comparison in a browser.
 Greedy and our planner run separately on the **same generated input**, each with a **60-second hard process limit**. Both plans are checked by the official scorer. Crashes, timeouts, missing output, malformed JSON and invalid plans score zero and do not abort the remaining cases. Generation/setup errors are recorded and excluded from score comparisons. The runner exits nonzero if either planner or scenario setup failed; losing to greedy is a completed comparison, not an execution error.
 
 Generation and the external scoring calls are outside each planner's measured runtime. Parallel workers share CPU, so their timing and time-bounded search scores can differ from a single-worker run. Use `--workers 1` when assessing performance under the competition's per-scenario budget. A custom candidate can be compared using `--planner path/to/planner.py`. Existing output directories are rejected to prevent overwriting results.
+
+### Phase 3 LNS changes, held-out seeds 30–45, 45 s
+
+Each change was one commit, benchmarked with `python test_logger.py --workers 1 --seconds 45` on the tuning seeds L1–L4 × 0–2, 15–20 (36 cases). Candidates that won tuning then ran on the held-out seeds L1–L4 × 30–45 (64 cases). Losers were reverted. Every batch ran at the same time as a reference run on one 8-CPU machine. Run ids, per-level scores, per-operator LNS counters and the throttling test are in [history/2026-11-22-phase3.md](history/2026-11-22-phase3.md). Every plan in every run was valid.
+
+| Commit | Change | Tuning: reference → change | Held-out: reference → change | Kept |
+|---|---|---:|---:|---|
+| 35448b2 | Per-operator LNS counters (`lns.ops`) | stats only | | yes |
+| 78daf53 / 06aed63 | `blocker` destroy op (15%): frees the effectors and tour slots of a top unserved contact | 20481.66 → 20408.16 (−73.5) | | no |
+| 8a3f797 / 17245d3 | `tour` op in the default mix (10%); half of its picks clear a whole scout tour and rebuild it by insertion | 20397.01 → 20467.91 (+70.9) | 35012.57 → 34953.34 (−59.2) | no; re-applied on width 9 (e5f0e63) |
+| b5350cb / a961e47 | Exact reinsertion: up to 120 insertion orders when a repair places ≤ 5 contacts, 0.5 s cap | 20467.91 → 20429.51 (−38.4) | | no |
+| b271d6d | `lns_share` 0.6 with ≥ 40 hostile+unknown contacts, else 0.4 | 20452.19 → 20601.12 (+148.9) | 34893.80 → 35127.38 (+233.6) | yes |
+
+Stack before beam width 9 (commit 17245d3, note `phase3-heldout`), 64 held-out cases beside master: **35127.38 vs 34893.80 (+233.58, +0.7%)**. L1 1561.38 (tie), L2 4054.27 vs 4054.22, L3 8266.33 vs 8262.77, L4 21245.39 vs 21015.43. It won 20 cases, lost 13 and tied 31, and all 64 plans were valid. The slowest planner process took 46.08 s unthrottled. Summed LNS counters were 32296 iterations, 15584 accepted moves, 760 improvements and +1834.6 gain. Gain by operator, in improvements / gain: `trip` 132 / 494.8, `group` 105 / 488.9, `related` 281 / 448.3, `random` 242 / 402.6.
+
+- **`blocker`** had the lowest gain per try of all operators (54 points over 2223 tries). Freeing a blocked contact's resources rarely let it be reinserted at a profit.
+- **Tour rebuild** gained more per try than `random` or `related`, but it took steps from them. Alone it lost on held-out seeds (−59.2) and was reverted. It was re-applied on beam width 9 (below), where it won.
+- **Exact reinsertion** found a better order in 3791 of 5476 repairs, but each repair cost more. LNS ran half as many iterations (9300 vs 16151), and the total fell.
+- **`lns_share`** on tuning seeds, step-2 code: 0.3 −108.0, 0.5 +6.7, 0.6 +131.8 and the size rule +148.9 against 0.4. On held-out seeds, 0.6 everywhere scored 35131.40 and the size rule 35214.37. Only L4 (70 hostile+unknown contacts) gets the larger share; L1–L3 have 4–20.
+- **`since_best < 1500`** instead of 400 changed L1–L2 by +1.6 in total (3420.48 → 3422.04), so the early stop stays at 400. Except L1-20, every L1 case stops after 1.5–4.6 s, already at the same score.
+- **Throttling:** the slowest held-out L4 case ran in 45.7–46.1 s wall time with valid plans under `cpulimit -l 50` and `-l 33` (1.6–2.6× fewer candidate checks than unthrottled). Final validation finished by 45.4 s, before the 50 s `validate_stop`, so the margin to 60 s is about 14 s and the cutoff was not changed.
+
+Run-to-run noise is large: master scored 34803.60, 35012.57 and 34893.80 on the held-out seeds in separate batches, almost all of the spread on L4. Gains under about 200 points on held-out are not established by one batch.
+
+**On beam width 9.** `master` then merged phase 2 (beam width 9), so the kept rule and the tour rebuild were re-run on held-out seeds 30–45 beside the new `master`, all at the same time (note `phase3-heldout w9`):
+
+| Code | Total | L1 | L2 | L3 | L4 | Valid | Slowest s |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| master a58eefb (width 9) | 35111.07 | 1566.17 | 4050.29 | 8260.28 | 21234.34 | 64/64 | 45.99 |
+| + size rule | 35209.69 (+98.6) | 1566.17 | 4050.29 | 8263.15 | 21330.08 | 64/64 | 45.89 |
+| + size rule + tour rebuild | **35415.98 (+304.9)** | 1566.17 | 4050.30 | 8262.83 | 21536.69 | 64/64 | 46.09 |
+
+The tour rebuild with the size rule has now beaten the rule alone in both held-out batches that included both (+152.4, then +206.3), so it is kept. It won 24, lost 19 and tied 21 cases against `master`. Under `cpulimit -l 50` and `-l 33`, the two slowest L4 cases ran in 45.6–45.9 s wall time with valid plans.
 
 ### Held-out batch, seeds 70–74, 45 s
 
@@ -280,6 +349,31 @@ Same 17 scenarios, 4 versions per run, 4 workers, default 45 s. Base is master a
 Random n in 2–4 is the default. Its gain over base is +237 summed (+0.8%), but it comes almost entirely from run 1: run 2 is a tie within the 0.4–1% run-to-run noise. Against base, mix won 11 and lost 5 in run 1, and won 8 and lost 8 in run 2. Base itself moved by +149 between the runs. Per-case swings of ±40–60 on L4 go both ways; for example, L4-14 was +102 in run 1 and −64 in run 2. Over the two runs the group move improved the best plan 85 times (out of ~3500 tries). About 70% of tries pass the estimate gate and are realised, and LNS iterations drop by ~12% because a group move costs more than a `trip` move.
 
 ### Local benchmark results
+
+### Joint re-plan of conflicting strikes (LNS operator `strike`)
+
+The strike move samples concrete candidate effector routes for an unserved positive-net
+hostile, identifies the existing aircraft that actually violate separation (including pad
+takeoffs), drops one to three conflicting hostile strike teams while retaining their scout
+observations, then retries the target and displaced strikes in several orders.  Every retry
+uses the normal incremental extension, so R4, R8 and R10 are rechecked globally.  It reports
+`strike_tried`, `strike_accepted`, `strike_improvements` and `strike_gain` in `lns`.
+
+Two 17-scenario, 45-second, four-worker frozen-copy runs compared master with random 1--3
+removed conflicts (`mix`), fixed sizes, and a 30% strike share.  All 204 candidate plans were
+valid; the slowest wall time was 46.1 s.  The default `mix` gained in both runs and on L4, so it
+is enabled at a 20% LNS share.
+
+| Run | Base | mix (1--3) | L4 base | L4 mix |
+|---|---:|---:|---:|---:|
+| 1 | 14304.5 | 14372.4 | 10401.6 | 10477.6 |
+| 2 | 14358.5 | 14447.0 | 10453.4 | 10551.3 |
+
+The move won/lost/tied 7/7/3 cases in run 1 and 8/6/3 in run 2.  It improved the best plan only
+six times across 3,477 attempts, so the +156.4 summed gain is small relative to the observed
+run noise.  It did not recover C22 or C07 in these winners; C30, C06, C14, C50, C48 and C17 were
+already served in the relevant board plans.  Fixed-size and higher-share variants were less
+consistent (the 30% share won run 1 but lost run 2), so they are not defaults.
 
 Measured on this machine with five-second search budgets. These are sampled scenarios, not a guarantee of performance on unseen inputs.
 
@@ -490,6 +584,12 @@ Leaderboard setting (1000 m, 200 B/s), greedy plans, 40 unseen scenarios (L1–L
 | **policy.py** | **0.799** | **0.817** | **9/80** |
 
 About 9 messages per aircraft per minute and under 0.2 ms per call. The remaining failures are all separation (R8) between aircraft that leave the plan close together, mostly on L4.
+
+### Plan fragility vs link-loss retention
+
+`search_planner.plan_fragility(plan, scenario)` scores a plan as tight couplings + near pairs − (capped mean gap / 120 s). Tight couplings are engage waypoints with confirm slack under 10 s. Near pairs are aircraft pairs closer than `d_sep_m` + 20 m. The gap is the confirm→strike gap. `fragility_parts` returns the components. The planner's diagnostics and the benchmark summary log both (about 20–40 ms on an L4 plan).
+
+`analysis/fragility_correlation.py` scored 127 archive plans on 10 tuning cases with `policy.py`. Within a scenario, fragility does not predict retention: rho −0.01 at 1000x200, −0.05 at 500x100 and 250x50, every CI spanning 0. Near pairs even correlate the wrong way (+0.17). Details are in `history/2026-11-22-fragility-correlation.md`. The link-loss-aware tie-breaker was therefore not built. The official link-loss score uses the organisers' reference plans anyway.
 
 ### Link-loss knowledge store
 
