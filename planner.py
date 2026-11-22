@@ -147,8 +147,7 @@ def main():
             save_tree(report, args.artifacts / "tree.html")
         print(json.dumps({key: report[key] for key in
                           ("elapsed_s", "passes", "lns", "trip_plan", "candidate_checks", "rejections",
-                           "unserved", "unserved_points", "fragility", "contacts", "solutions",
-                           "errors")
+                           "unserved", "unserved_points", "fragility", "contacts", "solutions", "errors")
                           if key in report}), file=sys.stderr)
     except Exception:
         traceback.print_exc()
