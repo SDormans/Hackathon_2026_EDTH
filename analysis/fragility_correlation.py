@@ -35,13 +35,14 @@ def plan_case(task):
     level, seed, width, seconds, out = task
     folder = Path(out) / f"{level}-{seed}" / f"w{width}"
     folder.mkdir(parents=True, exist_ok=True)
-    scn = folder.parent / "scenario.json"
-    if not scn.exists():
-        save_json(generate(level, seed), scn)
+    scn = folder / "scenario.json"
+    save_json(generate(level, seed), scn)
     env = dict(os.environ, PYTHONPATH=str(_kit.KIT))
-    subprocess.run([sys.executable, str(ROOT / "planner.py"), str(scn), str(folder / "plan.json"),
-                    "--seconds", str(seconds), "--beam-width", str(width), "--artifacts", str(folder / "art")],
-                   env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=70)
+    run = subprocess.run([sys.executable, str(ROOT / "planner.py"), str(scn), str(folder / "plan.json"),
+                          "--seconds", str(seconds), "--beam-width", str(width), "--artifacts", str(folder / "art")],
+                         env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=70)
+    if run.returncode:
+        raise RuntimeError(f"planner failed on {level}-{seed} width {width}: exit {run.returncode}")
     return sorted(str(p) for p in (folder / "art").glob("plan-*.json"))
 
 
