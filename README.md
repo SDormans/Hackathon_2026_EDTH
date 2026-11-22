@@ -14,7 +14,7 @@ For a shorter run with five candidate plans and the tree:
 
 ```sh
 python3 planner.py path/to/scenario.json output/plan.json \
-  --seconds 5 --top-n 5 --beam-width 6 --lns-share 0.4 --artifacts output/search
+  --seconds 5 --top-n 5 --beam-width 9 --lns-share 0.4 --artifacts output/search
 ```
 
 Open `output/search/tree.html` in a browser. Drag to pan, scroll to zoom, click nodes to inspect decisions, and click a ranked solution to highlight its path. The directory also contains `tree.json` with parent links, decisions, scores and rejection counts, plus `plan-01.json`, `plan-02.json`, etc. These are ordinary plans accepted by the official validator. There may be fewer than N if the run finds fewer distinct valid plans.

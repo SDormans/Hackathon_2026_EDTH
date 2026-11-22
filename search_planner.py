@@ -1278,7 +1278,7 @@ class WarmPlanner(_Planner):
 
 
 class Search:
-    def __init__(self, scenario, seconds=45.0, top_n=5, beam_width=6, start=None, lns_share=0.4,
+    def __init__(self, scenario, seconds=45.0, top_n=5, beam_width=9, start=None, lns_share=0.4,
                  interleave=False, adaptive=False, restarts=True, widen=False,
                  scout_speed="fast", obs_stretch=True):
         if seconds < 0 or not 1 <= top_n <= 100 or not 1 <= beam_width <= 100:
