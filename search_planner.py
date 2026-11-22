@@ -39,12 +39,6 @@ DESTROY_OPERATORS = ("random", "related", "worst", "tour", "trip", "group")
 # Scout candidate generation.
 BEAM_DIVERSE = 3        # beam slots kept for states with an unrepresented used/served set
 BEAM_DIVERSE_EXTRA = False  # diverse slots come on top of the width (else they replace its tail)
-# Beam states rank by score + BOUND_WEIGHT * optimistic value of the contacts still to come:
-# net points x a feasibility fraction 1 - 0.5**n (n = scouts that could still reach the
-# contact in its window; effectors: spare free aircraft per needed subtype), so contacts
-# that few remaining resources can serve weigh more.
-BOUND_RANK = True
-BOUND_WEIGHT = 1.0
 SCOUT_FANOUT = 4        # scouts tried first for a contact
 SCOUT_FALLBACK = 8      # scouts tried when none of the first SCOUT_FANOUT gives a valid child
 FULL_INSERT_TASKS = 4   # tours up to this long try every insertion position, not only 3
@@ -1658,103 +1652,6 @@ class Search:
                     improved = True
         return state
 
-    def setup_bound(self, contacts):
-        """Static per-contact values for the beam's optimistic bound."""
-        self.bound_value, self.bound_needs = {}, {}
-        for c in contacts:
-            if c.cls == HOSTILE:
-                team = self.matrix.groups(c, set(), 1)
-                if not team:
-                    continue
-                net = c.points - sum(self.matrix.costs[a.id, c.id] for a in team[0])
-                self.bound_needs[c.id] = {sub: k for sub, k in c.needs.items() if k > 0}
-            else:
-                net = c.points
-            if net > 0:
-                self.bound_value[c.id] = net
-        self._bound_scouts, self._bound_effectors = {}, {}
-
-    def _scout_reach(self, sid, route, energy):
-        """Bound contacts this scout could still observe after its current tour (straight
-        legs from its last observation, window, horizon and remaining battery)."""
-        key = (sid, id(route))
-        hit = self._bound_scouts.get(key)
-        if hit is not None and hit[0] is route:
-            return hit[1]
-        if len(self._bound_scouts) > 50000:
-            self._bound_scouts.clear()
-        scout = self.aircraft[sid]
-        speed = eco_speed(scout) if SCOUT_SPEED_MODE == "eco" else fast_speed(scout)
-        per_m = scout_wh_per_m(scout)
-        ready, pos = 0.0, scout.home[:2]
-        for w in reversed(route or ()):
-            if w.get("action") == "observe":
-                ready, pos = w["t"] + w.get("dwell_s", 0.0), (w["x"], w["y"])
-                break
-        spare = scout.usable_wh - (energy if route else 0.0)
-        dwell, reach = self.sc.rules.obs_dwell_s, self.sc.rules.R_obs_m
-        home_leg = hdist(pos, scout.home)
-        out = set()
-        for cid in self.bound_value:
-            c = self.contacts[cid]
-            lo, hi = c.window
-            d = max(0.0, hdist(pos, c.pos) - reach)
-            finish = max(ready + d / speed, lo) + dwell
-            if finish > hi + EPS:
-                continue
-            back = hdist(c.pos, scout.home)
-            if finish + back / speed > self.sc.horizon_s + EPS:
-                continue
-            if max(0.0, d + back - home_leg) * per_m > spare:
-                continue
-            out.add(cid)
-        self._bound_scouts[key] = (route, out)
-        return out
-
-    def _free_effectors(self, used):
-        free = self._bound_effectors.get(used)
-        if free is None:
-            free = {}
-            for a in self.matrix.effectors:
-                if a.id not in used:
-                    free[a.subtype] = free.get(a.subtype, 0) + 1
-            if len(self._bound_effectors) > 20000:
-                self._bound_effectors.clear()
-            self._bound_effectors[used] = free
-        return free
-
-    def bound(self, state, remaining):
-        """Optimistic value of the contacts still to be decided in this pass;
-        O(remaining x scouts) set lookups per state.
-
-        Hostiles share free effectors: each needed subtype contributes
-        min(1, free / remaining demand), so a free aircraft counts once, not per contact."""
-        reach = [self._scout_reach(sid, state.routes.get(sid), state.energies.get(sid, 0.0))
-                 for sid in state.tasks]
-        free = self._free_effectors(state.used)
-        todo, demand = [], {}
-        for c in remaining:
-            value = self.bound_value.get(c.id)
-            if value is None or c.id in state.served:
-                continue
-            needs = self.bound_needs.get(c.id) if c.cls == HOSTILE else None
-            if needs is not None:
-                if any(free.get(sub, 0) < k for sub, k in needs.items()):
-                    continue
-                for sub, k in needs.items():
-                    demand[sub] = demand.get(sub, 0) + k
-            todo.append((c.id, value, needs))
-        total = 0.0
-        for cid, value, needs in todo:
-            n = sum(1 for r in reach if cid in r)
-            if not n:
-                continue
-            f = 1.0 - 0.5 ** n
-            if needs:
-                f *= min(min(1.0, free[sub] / demand[sub]) for sub in needs)
-            total += value * f
-        return total
-
     def search(self, contacts, priorities, rng):
         """Beam passes over varied contact orders until the checker deadline.
         Returns False once the trace cap is reached."""
@@ -1794,11 +1691,7 @@ class Search:
                 width = self.width
                 if self.widen and self.passes >= 4:
                     width = min(100, self.width + self.width // 2)
-                ranked = list(unique.values())
-                rest = order[depth:]
-                if BOUND_RANK and rest:
-                    ranked.sort(key=lambda st: -(st.score + BOUND_WEIGHT * self.bound(st, rest)))
-                beam = diverse_beam(ranked, width)
+                beam = diverse_beam(list(unique.values()), width)
                 kept = {state.signature() for state in beam}
                 # Valid serving children cut by the beam width ("outranked" in the beam).
                 self.stats(contact.id)["beam_pruned"] += sum(
@@ -1828,7 +1721,6 @@ class Search:
         contacts = [c for c in self.sc.contacts if c.cls in (HOSTILE, UNKNOWN)
                     and c.window is not None and c.id not in self.matrix.banned]
         priorities = {c.id: self.matrix.priority(c) for c in contacts}
-        self.setup_bound(contacts)
         rng = random.Random(self.sc.seed)
         self.checker.stop = min(self.beam_stop, self.stop)
         if TRIP_PLAN and contacts:
