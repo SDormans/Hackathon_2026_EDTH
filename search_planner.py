@@ -1251,12 +1251,25 @@ class WarmPlanner(_Planner):
         return super()._add_observation(*args)
 
 
+# Default LNS share of the budget: larger scenarios gain more from repair than from more beam passes.
+LNS_SHARE = 0.4
+LNS_SHARE_LARGE = 0.6
+LNS_LARGE_CONTACTS = 40  # hostile + unknown contacts
+
+
+def default_lns_share(scenario):
+    n = sum(c.cls in (HOSTILE, UNKNOWN) for c in scenario.contacts)
+    return LNS_SHARE_LARGE if n >= LNS_LARGE_CONTACTS else LNS_SHARE
+
+
 class Search:
-    def __init__(self, scenario, seconds=45.0, top_n=5, beam_width=6, start=None, lns_share=0.4,
+    def __init__(self, scenario, seconds=45.0, top_n=5, beam_width=6, start=None, lns_share=None,
                  interleave=False, adaptive=False, restarts=True, widen=False,
                  scout_speed="fast", obs_stretch=True):
         if seconds < 0 or not 1 <= top_n <= 100 or not 1 <= beam_width <= 100:
             raise ValueError("seconds must be nonnegative; top_n and beam_width must be 1..100")
+        if lns_share is None:
+            lns_share = default_lns_share(scenario)
         if not 0 <= lns_share <= 1:
             raise ValueError("lns_share must be 0..1")
         if scout_speed not in SCOUT_SPEEDS:
