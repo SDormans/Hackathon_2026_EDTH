@@ -187,7 +187,9 @@ def contact_summary(rows):
     Missing detail (old logs/custom planners/failed runs) is excluded explicitly.
     """
     classes = {cls: dict(contacts=0, served=0, unserved=0, scout_failures=0,
-                        reasons={}, unserved_points={}) for cls in ('hostile', 'unknown')}
+                        outranked_beam_pruned=0, outranked_beam_pruned_points=0,
+                        beam_pruned_children=0, reasons={}, unserved_points={})
+               for cls in ('hostile', 'unknown')}
     covered = missing = 0
     for row in rows:
         contacts = row.get('diagnostics', {}).get('contacts')
@@ -198,6 +200,7 @@ def contact_summary(rows):
         for entry in contacts.values():
             bucket = classes[entry['cls']]
             bucket['contacts'] += 1
+            bucket['beam_pruned_children'] += entry.get('beam_pruned', 0)
             if entry['served']:
                 bucket['served'] += 1
                 continue
@@ -205,6 +208,10 @@ def contact_summary(rows):
             reason = entry['reason']
             bucket['reasons'][reason] = bucket['reasons'].get(reason, 0) + 1
             bucket['unserved_points'][reason] = bucket['unserved_points'].get(reason, 0) + entry['points']
+            # Outranked contacts whose valid serving children the beam width cut.
+            if reason == 'outranked' and entry.get('beam_pruned', 0):
+                bucket['outranked_beam_pruned'] += 1
+                bucket['outranked_beam_pruned_points'] += entry['points']
             if reason == 'scout_route' or reason.startswith('scout_rule:'):
                 bucket['scout_failures'] += 1
     for bucket in classes.values():
