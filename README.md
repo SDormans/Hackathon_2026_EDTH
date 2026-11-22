@@ -473,9 +473,45 @@ python3 submit_to_board.py --token <TOKEN> --skip-submit
 
 The `--team` (default `ELARIS`) and `--server` (default `http://192.168.2.19:8080/`) flags can be overridden if needed. Plans are written to `board-plans/` and scenarios to `validation/`. The server keeps your best score per scenario, so resubmitting a worse plan never hurts.
 
+## Approach & hand-in
+
+**Hand-in set:** `planner.py`, `search_planner.py`, `candidate_matrix.py`, `tree_view.py` (planner) and `policy.py` (link-loss policy). A clean copy of only these five files, with the official kit on `PYTHONPATH` and nothing else, plans an L4 scenario in 45.8 s, passes `fleetkit validate`, and `policy.py` loads through the kit's `linkloss` loader. Imports are the standard library and `fleetkit` only (no numpy).
+
+**(a) Approach.** The planner is a deadline-bounded search over *valid partial plans*. A capped greedy warm start (the baseline's choices with faster checks) gives a first valid plan. Beam search (width 9) then expands contacts in several orders (scarcity/value, window close, points, seeded random), keeping serve and skip branches and up to three effector groups ranked by the candidate matrix. Every child is checked incrementally against the official rules: local rules on changed routes, separation for every pair involving a changed route, and confirmation and strike completeness globally. A greedy repair pass and large neighbourhood search use the end of the budget (LNS share 0.4, 0.6 with at least 40 hostile+unknown contacts). LNS removes 1–4 served contacts and reinserts them and their neighbours (trying up to 120 insertion orders when at most 5 are placed). It also has scout-trip, tour-rebuild, joint n-scout and joint strike re-plan moves. The best archived plans are fully validated with the official scorer before export. The valid empty plan is the last fallback, also written by a watchdog, so a run never exports an invalid plan.
+
+**(b) Link-loss robustness.** `policy.py` keeps the validated plan as the default and only deviates for a sensed or announced danger:
+- `TRUST_PLAN`: when two aircraft are both on schedule, the validated plan already separates them, so that pair skips the separation check. Second-guessing it made strike partners back into each other.
+- Route-clock deltas: each aircraft predicts its peers from the plan plus their announced (route time, rate), with ±1.5 s slack for stale messages. An aircraft only messages once it is off schedule: it announces its rate change, then beacons its state every 1 s.
+- One-step reachable-set filter (`SAFE_STEP`): every move must keep d_sep + 5 m from every position a peer could reach this step, widened for messages that may have been lost. Between two off-schedule aircraft the later id gives way (`YIELD_OFF_PLAN`).
+- Store-and-forward danger news (`NEWS_MODE = "forward"`): reclassified contacts and pop-up zones are kept and sent only when a peer that may lack them is predicted within the estimated radio range. Observation notices go only to that contact's strike effectors (`O_FORWARD`).
+- Deterministic proceed rules: an effector engages only on a confirmation it holds, from the plan or from the scout's exact observation end (`EXACT_OBS_END`). It holds short for late strike partners (`GROUP_SYNC`) or a late scout (`SCOUT_WAIT`), but never past window end minus `HOLD_LEAD_S` = 3 s (`WINDOW_CAP`). Otherwise it turns back. It never enters a known zone, and when boxed in it picks the rate with the most room (`BOXED_NOMINAL`).
+- No link-loss buffer is added at plan time. `planner.py --sep-buffer M` exists, but 10–15 m cost 3.3–3.4 % of plan score, mostly on L4. The official link-loss score uses the organisers' reference plans, so the default is 0 and the 15 m separation margin stays in the policy (`SEP_MARGIN_M`). Plan fragility also did not predict retention (see [Plan fragility](#plan-fragility-vs-link-loss-retention)).
+
+**(c) Comms requirements.** [analysis/linkloss_sizing.csv](analysis/linkloss_sizing.csv) is the official sizing grid for the frozen `policy.py` (`analysis/linkloss_eval.py run --policy policy.py --name final`). It covers the 8 validation scenarios with greedy plans, held-out event seeds 1001–1003 and 5 comm seeds, so each cell has 120 runs. A cell meets the bar when mean retention is at least 0.9 and no run fails:
+
+| Range | Retention (50–800 B/s) | Failed runs / 120 | Msgs/ac/min | S_loss | Minimum viable capacity |
+|---|---|---:|---:|---:|---|
+| 250 m | 0.947 | 0 | 21.9–22.2 | 0.903–0.904 | **50 B/s** |
+| 500 m | 0.975–0.977 | 0 | 19.8–19.9 | 0.936–0.937 | **50 B/s** |
+| 1000 m | 0.989–0.991 | 0 | 19.2–19.4 | 0.950–0.953 | **50 B/s** |
+| 2000 m | 0.993–0.994 | 0 | 16.6–16.7 | 0.960–0.961 | **50 B/s** |
+
+All 20 cells meet the bar (0/2400 failed runs, sizing_score 1.00), so the frontier is 50 B/s, the smallest capacity in the grid, at every range: the minimum viable budget is 250 m at 50 B/s. Capacity hardly matters because messages are a few bytes of base-93 records; retention rises with range. At the leaderboard setting (1000 m, 200 B/s), retention is 0.991 with 0/120 failures, **19.2 messages per aircraft per minute** and S_loss 0.953. Most messages are the 1 s off-schedule beacons that the reachable-set filter needs. On our own 45 s plans (`analysis/linkloss_bench.py`, 400 runs per cell, see *Link-loss safety pass*) the same policy has 1/400 failed runs at 250 m × 50 B/s and 2/400 at 1000 m × 50 B/s.
+
+**(d) Low compute.** The planner is one Python process using the standard library only, with no training or learned weights and no subprocesses. The search deadline is 45 s of wall-clock time from process start on one core. This was measured on an 8-core cloud VM; a slower laptop CPU only searches less within the same deadline. Under `cpulimit -l 33`, the slowest L4 cases still finished in about 46 s with valid plans. Final validation starts no new call after 50 s, which leaves 10 s of the 60 s limit for output and a slower grader. On held-out L1–L4 seeds 30–45 (64 cases, one worker), the slowest planner process took 45.81 s. The policy needs no precomputation.
+
+**(e) Known limitations.**
+- The search is heuristic. Shortlists, a bounded beam and the improving-child rule can discard better plans, and L4 totals vary by about 0.5 % with CPU load.
+- Residual scout failures: some contacts stay unserved because every scout route that was found broke R8/R3/R1 or missed the window. Over the 64 final held-out cases, `scout_window` left 102 contacts (5380 points) unserved, 99 of them on L4, and other scout-route or scout-rule failures left 7 more (323 points). Collateral bans (225 contacts) and `outranked` (127) are larger but are not routing failures.
+- Handover/coverage: scouts are planned as independent tours. There is no explicit handover between scouts, and no re-observation cover if a scout is lost.
+- Link loss: the official grid has no failed runs, but on our own plans a few runs out of 400 still fail at 250 m and 1000 m × 50 B/s (an unavoidable pop-up zone, lost hold messages near the base). Adversarial event draws, such as a reclassification or pop-up zone next to a shared strike target, can still force two aircraft off plan at the same place. The beacons cost about 0.04 S_loss at the leaderboard setting.
+- The deadline is cooperative: a machine stall inside one validator call is not preempted, although the watchdog still writes the empty plan.
+
+**Extras (not part of the hand-in).** `analysis/explain_plan.py` writes one "why" line per contact from the planner's diagnostics: which scout and effectors serve it and at what estimated cost, or why it was skipped (unreachable, window, collateral, outranked, no effectors). The scaling study at 30/60/100 aircraft is in [analysis/scaling_study.md](analysis/scaling_study.md). The final held-out run is in [history/2026-11-22-final-heldout-30-45.md](history/2026-11-22-final-heldout-30-45.md).
+
 ## Hand-in
 
-Copy `planner.py`, `search_planner.py`, `candidate_matrix.py` and `tree_view.py` together. The official runner supplies `fleetkit` via `PYTHONPATH`. Local runs discover the bundled kit; `FLEETKIT_DIR` can explicitly select another copy. No third-party packages are required, and no changes to the official kit are needed.
+Copy `planner.py`, `search_planner.py`, `candidate_matrix.py` and `tree_view.py` together, and `policy.py` for the link-loss part. The official runner supplies `fleetkit` via `PYTHONPATH`. Local runs discover the bundled kit; `FLEETKIT_DIR` can explicitly select another copy. No third-party packages are required, and no changes to the official kit are needed.
 
 The original analysis and isolated-mission checker remain in [analysis/](analysis/README.md).
 
@@ -625,7 +661,8 @@ python3 analysis/linkloss_eval.py report --sizing-from wcap
 | Phase 5 | 0.967 | 2/120 | 9.56 | 0.948 | 174/2400 | 0.00 | none | never (fails a run in every row) |
 | + `BOXED_NOMINAL` | 0.973 | 1/120 | 9.58 | 0.954 | 121/2400 | 0.00 | none | never |
 | + `O_FORWARD` | 0.986 | 0/120 | 5.65 | 0.975 | 94/2400 | 0.50 | 1000:50 2000:50 | 50 B/s at 1000 and 2000 m |
-| **+ `WINDOW_CAP` (kept)** | **0.986** | **0/120** | **5.65** | **0.975** | **94/2400** | **0.50** | **1000:50 2000:50** | **50 B/s at 1000 and 2000 m** |
+| + `WINDOW_CAP` | 0.986 | 0/120 | 5.65 | 0.975 | 94/2400 | 0.50 | 1000:50 2000:50 | 50 B/s at 1000 and 2000 m |
+| **Final `policy.py` (safety pass, frozen)** | **0.991** | **0/120** | **19.17** | **0.953** | **0/2400** | **1.00** | **50 B/s at every range** | **50 B/s at every range** |
 
 A cell "meets" when it has 0 failures and beats continue and all-return; `hold` meets everywhere but keeps only 47 %. **The 0-violation gate is not met**: the kept variant has 0 failures at 1000 and 2000 m, but 17-18/120 runs fail at 250 m and 1-2/120 at 500 m, all separation (R8). No R4 failure occurred in any variant.
 

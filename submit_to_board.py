@@ -36,7 +36,7 @@ def run(cmd, env=None, check=True):
 def fleetkit_cmd(*args, **kwargs):
     return run(
         [sys.executable, "-m", "fleetkit", *args],
-        env={"FLEETKIT_DIR": FLEETKIT_DIR},
+        env={"FLEETKIT_DIR": FLEETKIT_DIR, "PYTHONPATH": FLEETKIT_DIR},
         **kwargs,
     )
 
@@ -85,7 +85,7 @@ def step_score():
             continue
         result = subprocess.run(
             [sys.executable, "-m", "fleetkit", "score", str(scenario), str(plan)],
-            env={**os.environ, "FLEETKIT_DIR": FLEETKIT_DIR},
+            env={**os.environ, "FLEETKIT_DIR": FLEETKIT_DIR, "PYTHONPATH": FLEETKIT_DIR},
             capture_output=True, text=True,
         )
         line = (result.stdout or result.stderr).strip()
