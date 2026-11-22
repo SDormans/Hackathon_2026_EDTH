@@ -94,6 +94,7 @@ STEP_MARGIN_M = 5.0
 BLOCK_MARGIN_M = 5.0    # margin when predicting that an on-schedule peer must stop
 YIELD_OFF_PLAN = True    # between off-schedule aircraft the later id keeps clear of any move of the earlier
 YIELD_FRESH_S = 2.0     # ... and the earlier one counts on that only for a later-id peer heard this recently
+HULL_S = 1e9             # an off-schedule peer may have stopped this long ago unheard
 ANY_CAP_S = 10.0        # how long an earlier-id peer may have been changing its mind unheard
 BEACON_S = 2.0          # off schedule with no peer believed near: re-announce this often
 FORMATION_M = 120.0     # an on-schedule peer this close that must stop is expected to stop where it is
@@ -571,8 +572,11 @@ class Policy:
             # decisions after the announced one are unknown; changes are announced at once and repeated,
             # so a long silence means no change (or a lost aircraft) rather than unbounded drift
             c, k = tau0 + rate * (t - t0), min(max(0.0, t - t0 - 1.0), STALE_CAP_S) + 0.1
-            # it may have stopped anywhere since (the news lost): from the announced point to the extrapolated one
-            return _polyline(clock, min(tau0, c) - k - step, max(tau0, c) + k + step)
+            if (rate < 0.0 and c - k <= clock.start) or (rate > 0.0 and c + k >= clock.end):
+                return None    # back on the ground, or done, if it kept to its announced state
+            # it may have stopped in the last HULL_S (the news lost): back to where it was then
+            cb = tau0 + rate * max(0.0, t - t0 - HULL_S)
+            return _polyline(clock, min(cb, c) - k - step, max(cb, c) + k + step)
         return _polyline(clock, c - k - step, c + k + step)
 
     def _peer_any(self, aid, t):
@@ -581,7 +585,8 @@ class Policy:
         tau0, rate, t0 = self.peer_state[aid]
         c = tau0 + rate * max(0.0, t - t0 - ANY_CAP_S)
         k = min(max(0.0, t - t0), ANY_CAP_S) + 1.1
-        return _polyline(self.peers[aid][0], min(tau0, c) - k, max(tau0, c) + k)
+        cb = tau0 + rate * max(0.0, t - t0 - HULL_S)
+        return _polyline(self.peers[aid][0], min(cb, c) - k, max(cb, c) + k)
 
     def _peer_nominal(self, aid, t):
         """Planned positions a peer occupies during [t, t + 1] if it keeps its announced state."""
@@ -644,7 +649,11 @@ class Policy:
             if self._peer_on_plan(aid, t) and (trusted or hold_on_plan) and FORMATION_M > 0.0:
                 blocked = self._peer_blocked(aid, t, near)
                 if hold_on_plan and blocked:
-                    continue           # held at the same route time as the peer: as planned
+                    # if it does stop we are held at the same route time, as planned; if my guess is
+                    # wrong it moves on, so my hold must keep clear of its next step
+                    reach = _polyline(self.peers[aid][0], t, t + 1.0)
+                    if reach is None:
+                        continue
                 if trusted and blocked:
                     reach = self._polyline_point(aid, t)   # it stops where it is now
                 elif trusted:
