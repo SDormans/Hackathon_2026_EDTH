@@ -985,3 +985,56 @@ class GroupTests(unittest.TestCase):
         for state, result in verified:
             self.assertTrue(evaluate(sc, state.plan(sc.seed)).valid)
             self.assertAlmostEqual(result.score, state.score, places=6)
+
+
+class StrikeGroupTests(unittest.TestCase):
+    """Strike-side LNS uses route conflicts and retains scout confirmations."""
+    def test_conflict_finder_uses_actual_r8_candidate_route(self):
+        sc = scenario()
+        # Put the two effector pads inside R8 separation distance.  Two identical
+        # strike trajectories then genuinely conflict; this is not a target-distance
+        # approximation.
+        sc = replace(sc, aircraft=[replace(a, home=(0, 0, 0)) if a.type == 'effector' else a
+                                   for a in sc.aircraft])
+        s = Search(sc, seconds=10)
+        contact = sc.contacts[0]
+        eff = [a for a in sc.aircraft if a.type == 'effector']
+        first, _ = search_planner.effector_route(eff[0], contact, 180.0, 40.0, 0.0, sc)
+        second, _ = search_planner.effector_route(eff[1], contact, 180.0, 40.0, 0.0, sc)
+        info = s.checker.route_info(eff[0].id, first)
+        parent = search_planner.State({eff[0].id: first}, {a.id: [] for a in sc.aircraft if a.type == 'scout'},
+                                      frozenset(), {eff[0].id: info[1]}, {eff[0].id: info[3]},
+                                      {eff[0].id: info[4]}, frozenset(), 0.0,
+                                      infos={eff[0].id: info})
+        self.assertIn(eff[0].id, s.strike_conflicts(parent, {eff[1].id: second}))
+
+    def test_drop_and_restrike_retains_observation_and_is_valid(self):
+        sc = Scenario.from_dict(generate('L4', 9))
+        s = Search(sc, seconds=6.0, lns_share=0.0)
+        best = s.run()[0][0]
+        s.checker.stop = time.monotonic() + 60.0
+        cid = next(c for c in best.served if s.contacts[c].cls == 'hostile')
+        partial = s.drop_strike(best, cid)
+        self.assertIsNotNone(partial)
+        self.assertNotIn(cid, partial.served)
+        self.assertTrue(any(t['cid'] == cid for ts in partial.tasks.values() for t in ts))
+        scout, route, end = s.observed_strike(partial, cid)
+        children = list(s.strikes(partial, s.contacts[cid], s.matrix.groups(s.contacts[cid], partial.used),
+                                  scout, route, end, time.monotonic() + 10.0))
+        self.assertTrue(children)
+        child = max((state for state, _ in children), key=lambda state: state.score)
+        result = evaluate(sc, child.plan(sc.seed))
+        self.assertTrue(result.valid, [str(v) for v in result.violations][:3])
+        self.assertIn(cid, child.served)
+
+    def test_strike_operator_can_be_disabled(self):
+        sc = Scenario.from_dict(generate('L3', 4))
+        old = search_planner.STRIKE_GROUP, search_planner.TRIP_SHARE, search_planner.GROUP_SHARE
+        search_planner.STRIKE_GROUP, search_planner.TRIP_SHARE, search_planner.GROUP_SHARE = False, 0.0, 0.0
+        try:
+            s = Search(sc, seconds=4.0, lns_share=0.5)
+            verified = s.run()
+        finally:
+            search_planner.STRIKE_GROUP, search_planner.TRIP_SHARE, search_planner.GROUP_SHARE = old
+        self.assertEqual(s.lns['strike_tried'], 0)
+        self.assertTrue(evaluate(sc, verified[0][0].plan(sc.seed)).valid)
