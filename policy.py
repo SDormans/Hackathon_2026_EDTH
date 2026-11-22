@@ -99,6 +99,8 @@ HULL_S = 1e9             # an off-schedule peer may have stopped this long ago u
 ANY_CAP_S = 10.0        # how long an earlier-id peer may have been changing its mind unheard
 BEACON_S = 1.0          # off schedule with no peer believed near: re-announce this often
 FORMATION_M = 120.0     # an on-schedule peer this close that must stop is expected to stop where it is
+STUCK_S = 30.0          # held off schedule against my wish this long: prefer moving for UNSTICK_S
+UNSTICK_S = 10.0
 AHEAD_S = 3             # steps of look-ahead to prefer options that avoid a closing peer
 SLOW_LOOK_S = 4.0       # ... and so must braking or stopping
 REVERSE_LOOK_S = 8.0    # a reversal must keep clear of on-schedule peers' next seconds
@@ -281,6 +283,7 @@ class Policy:
         self.window_end = c.window[1] if (c is not None and c.window) else None
         self.confirmed = None
         self.reclassified, self.zones = set(), []
+        self.held_since, self.unstick_until = None, -math.inf
         self.announce, self.reported = {}, {}
         self.aborted = False
         self.rate = 1.0
@@ -548,6 +551,9 @@ class Policy:
         t, tau = obs["t"], obs["tau"]
         options, may_engage = self._options(obs)
         options = [r for r in options if self._allowed(tau, r, may_engage)] or [0.0]
+        wanted = options[0]
+        if t < self.unstick_until and wanted != 0.0:
+            options = [r for r in options if r != 0.0] + [r for r in options if r == 0.0]
         if SAFE_STEP:
             options = self._safe_options(t, tau, options, may_engage)
         choice, best_room = options[0], -1.0
@@ -559,6 +565,13 @@ class Policy:
             if room > best_room:
                 choice, best_room = r, room
         self.rate = choice
+        if STUCK_S > 0.0 and choice == 0.0 and wanted != 0.0 and abs(tau - t) > ON_PLAN_S:
+            # held off schedule against my wish this long: peers may be waiting on me; try moving
+            self.held_since = t if self.held_since is None else self.held_since
+            if t - self.held_since >= STUCK_S:
+                self.unstick_until, self.held_since = t + UNSTICK_S, None
+        elif choice != 0.0:
+            self.held_since = None
         action = ({"kind": "continue"} if choice == 1.0 else {"kind": "hold"} if choice == 0.0
                   else {"kind": "return"} if choice == -1.0 else {"kind": "speed", "scale": choice})
         return action, self._message(obs, tau, choice)
