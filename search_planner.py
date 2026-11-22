@@ -69,7 +69,7 @@ class Search(BeamMixin, StrikeMixin, ScoutTripMixin, LNSMixin, DiagnosticsMixin)
                     "group_improvements": 0, "group_gain": 0.0, "group_label_s": 0.0,
                     "group_sizes": {}, "ops": {},
                     "strike_tried": 0, "strike_accepted": 0, "strike_improvements": 0,
-                    "strike_gain": 0.0, "ops": {},
+                    "strike_gain": 0.0,
                     "exact_steps": 0, "exact_orders": 0, "exact_wins": 0, "exact_gain": 0.0}
         self._trip_cache = {}
         self.trip_stats = {}

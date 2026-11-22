@@ -227,7 +227,6 @@ class BeamMixin:
         horizon, yield None without building a route.
         """
         ranks = slice(0, CONFIG.scout_fanout) if ranks is None else ranks
-        p = _Planner(self.sc)
         deadlines = strike_deadlines(self.sc, self.aircraft, parent.routes) if CONFIG.time_rank else {}
         for scout in self.ranked_scouts(parent, contact, insert)[ranks]:
             current = parent.tasks[scout.id]
