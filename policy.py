@@ -91,6 +91,8 @@ EXACT_OBS_END = True    # a scout reports its observation end from its route clo
 CONFIRM_SLACK_S = 0.1
 SAFE_STEP = True        # every move must keep d_sep + STEP_MARGIN_M from every peer's reachable positions this step
 STEP_MARGIN_M = 5.0
+BLOCK_MARGIN_M = 5.0    # margin when predicting that an on-schedule peer must stop
+BEACON_S = 2.0          # off schedule with no peer believed near: re-announce this often
 FORMATION_M = 120.0     # an on-schedule peer this close that must stop is expected to stop where it is
 REVERSE_LOOK_S = 8.0    # a reversal must keep clear of on-schedule peers' next seconds
 STALE_CAP_S = 3.0       # route-time drift assumed at most for a silent off-plan peer
@@ -592,7 +594,7 @@ class Policy:
         here = self.clock.position(min(max(t, self.clock.start), self.clock.end))
         seg = _polyline(clock, t, t + 1.0)
         if seg is not None and _d(seg[0], here) <= FORMATION_M:
-            need = self.sep - SEP_MARGIN_M + STEP_MARGIN_M
+            need = self.sep - SEP_MARGIN_M + STEP_MARGIN_M + BLOCK_MARGIN_M   # its view of others may be staler
             tgt = self.peers[aid][1]
             for other, _ in near:
                 if other == aid or self._peer_on_plan(other, t):
@@ -715,8 +717,10 @@ class Policy:
         changed = self.sent is None and rate != 1.0 or self.sent is not None and rate != self.sent[0]
         off = abs(tau - t) > 0.25 or rate != 1.0
         gap = REPEAT_S if self.repeats < 1 else REFRESH_S
-        if SAFE_STEP and getattr(self, "near_d", math.inf) < HEARTBEAT_NEAR_M:
-            gap = 1.0                                   # peers nearby check their moves against my state
+        if SAFE_STEP:
+            # peers check their moves against my state: every second while one is near, and a beacon
+            # every BEACON_S otherwise, since a peer I believe finished or far away may be neither
+            gap = 1.0 if getattr(self, "near_d", math.inf) < HEARTBEAT_NEAR_M else min(gap, BEACON_S)
         due = self.sent is not None and off and t - self.last_sent >= gap
         if changed:
             self.sent, self.repeats = (rate, t), 0
