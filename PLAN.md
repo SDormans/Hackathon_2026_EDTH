@@ -26,11 +26,14 @@ Safety comes before cleverness.
 | 2 | Takeoff scheduling: own takeoff time, heading and altitude per aircraft | Fix R8 at the base; likely the biggest gain | Daaksh | done: pad-aware takeoffs (`PAD_TAKEOFFS`). Remaining R8 is mostly en route; per-member takeoff slots, layer pairs and wider spacing all lost (README) |
 | 3 | Scouts: plan unknown contacts, insert each new visit at its best position in the tour | 10 of 15 scouts idle in L4 | ? | done: insertion in beam children and LNS, 8-scout fallback. 6 first scouts and extra departure shifts lost (README) |
 | 4 | Polish: swap/drop moves after the search, wait on the ground instead of hovering, fly at best-range speed | Small gains everywhere | ? | open: effectors already back-timed (no hover), scouts stretch legs instead of hovering, cruise at 0.995 v_h |
+| 5 | Link-loss policy: 0 violations on the held-out grid, retention up vs Phase 5 | Second scored part | ? | partly: held-out LB retention 0.967 -> 0.986, 0/120 failures, frontier 1000:50 2000:50; still R8 at 250-500 m (README, `analysis/linkloss_eval.py`) |
 
 ## How we accept a change
 1. Run the benchmark on the 8 validation scenarios **and** random new seeds.
 2. Merge only if the total score goes up **and** every plan passes the official validator.
 3. Don't tune to specific seeds: the final ranking uses unseen scenarios.
+
+Link-loss changes: evaluate with `analysis/linkloss_eval.py` on held-out event seeds (LB cell and full `sizing()` grid); accept only with no new failures.
 
 ## How we work
 - One person per task, each on their own branch.
