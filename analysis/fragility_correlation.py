@@ -12,6 +12,7 @@ from concurrent.futures import ProcessPoolExecutor
 import hashlib
 import json
 import os
+import shutil
 from pathlib import Path
 import statistics
 import subprocess
@@ -34,7 +35,8 @@ import search_planner  # noqa: E402
 def plan_case(task):
     level, seed, width, seconds, out = task
     folder = Path(out) / f"{level}-{seed}" / f"w{width}"
-    folder.mkdir(parents=True, exist_ok=True)
+    shutil.rmtree(folder, ignore_errors=True)
+    folder.mkdir(parents=True)
     scn = folder / "scenario.json"
     save_json(generate(level, seed), scn)
     env = dict(os.environ, PYTHONPATH=str(_kit.KIT))
