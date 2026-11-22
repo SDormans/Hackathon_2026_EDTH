@@ -36,9 +36,6 @@ class DeadlineReached(Exception):
 DESTROY_OPERATORS = ("random", "related", "worst", "tour", "trip", "group")
 TOUR_SHARE = 0.1        # share of LNS steps using "tour" (without --adaptive)
 TOUR_REBUILD = 0.5      # share of "tour" steps that clear the whole tour instead of k visits
-EXACT_REINSERT = 5      # repairs placing at most this many contacts try other insertion orders
-EXACT_ORDERS = 120      # at most this many orders per repair
-EXACT_REINSERT_S = 0.5  # time cap for the extra orders per LNS step
 
 
 # Scout candidate generation.
@@ -1285,8 +1282,7 @@ class Search:
                     "trip_gain": 0.0, "trip_label_s": 0.0,
                     "group_tried": 0, "group_realised": 0, "group_accepted": 0,
                     "group_improvements": 0, "group_gain": 0.0, "group_label_s": 0.0,
-                    "group_sizes": {}, "ops": {},
-                    "exact_steps": 0, "exact_orders": 0, "exact_wins": 0, "exact_gain": 0.0}
+                    "group_sizes": {}, "ops": {}}
         self._trip_cache = {}
         self.trip_stats = {}
         self.lns_share = lns_share
@@ -2153,46 +2149,6 @@ class Search:
                 return rng.sample(tour, min(k, len(tour)))
         return rng.sample(served, k)
 
-    def insert_best(self, partial, contact):
-        """Best child inserting contact (0.08 s cap), or partial itself."""
-        local_stop = min(self.checker.stop, time.monotonic() + 0.08)
-        chosen = partial
-        try:
-            for child, _ in self.children(partial, contact, local_stop, insert=True):
-                if chosen is partial or child.score > chosen.score:
-                    chosen = child
-        except DeadlineReached:
-            self.checker.check_time()
-        return chosen
-
-    def exact_reinsert(self, base, subset, greedy, rng):
-        """Best plan over insertion orders of the few contacts a repair placed or removed,
-        sharing order prefixes, until EXACT_ORDERS orders or EXACT_REINSERT_S seconds."""
-        self.lns["exact_steps"] += 1
-        orders = list(itertools.permutations(subset))
-        rng.shuffle(orders)
-        best, cache = greedy, {(): base}
-        saved = self.checker.stop
-        self.checker.stop = min(saved, time.monotonic() + EXACT_REINSERT_S)
-        try:
-            for order in orders[:EXACT_ORDERS]:
-                ids = tuple(c.id for c in order)
-                for i in range(1, len(ids) + 1):
-                    if ids[:i] not in cache:
-                        cache[ids[:i]] = self.insert_best(cache[ids[:i - 1]], order[i - 1])
-                self.lns["exact_orders"] += 1
-                if cache[ids].score > best.score + 1e-9:
-                    best = cache[ids]
-        except DeadlineReached:
-            pass
-        finally:
-            self.checker.stop = saved
-        if best is not greedy:
-            self.lns["exact_wins"] += 1
-            self.lns["exact_gain"] += best.score - greedy.score
-        self.checker.check_time()
-        return best
-
     def lns_step(self, st, contacts, priorities):
         rng, by_id = self.lns_rng, st["by_id"]
         current, best = st["current"], st["best"]
@@ -2244,16 +2200,18 @@ class Search:
         noise = {c.id: rng.uniform(0.6, 1.4) for c in pool}
         order = (sorted(pool, key=lambda c: -priorities[c.id] * noise[c.id])
                  + [by_id[c] for c in removed])
-        base, placed = partial, []
         for contact in order:
             self.checker.check_time()
-            child = self.insert_best(partial, contact)
-            if child is not partial:
-                partial = child
-                placed.append(contact)
-        subset = list({c.id: c for c in placed + [by_id[c] for c in removed]}.values())
-        if 2 <= len(subset) <= EXACT_REINSERT:
-            partial = self.exact_reinsert(base, subset, partial, rng)
+            local_stop = min(self.checker.stop, time.monotonic() + 0.08)
+            chosen_child = None
+            try:
+                for child, _ in self.children(partial, contact, local_stop, insert=True):
+                    if chosen_child is None or child.score > chosen_child.score:
+                        chosen_child = child
+            except DeadlineReached:
+                self.checker.check_time()
+            if chosen_child is not None:
+                partial = chosen_child
         tally = self.lns["ops"].setdefault("tour_rebuild" if rebuild else op,
                                            {"tried": 0, "accepted": 0, "improvements": 0,
                                             "gain": 0.0})
