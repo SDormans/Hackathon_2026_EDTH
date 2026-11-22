@@ -99,6 +99,7 @@ HULL_S = 1e9             # an off-schedule peer may have stopped this long ago u
 ANY_CAP_S = 10.0        # how long an earlier-id peer may have been changing its mind unheard
 BEACON_S = 1.0          # off schedule with no peer believed near: re-announce this often
 FORMATION_M = 120.0     # an on-schedule peer this close that must stop is expected to stop where it is
+AHEAD_S = 3             # steps of look-ahead to prefer options that avoid a closing peer
 SLOW_LOOK_S = 4.0       # ... and so must braking or stopping
 REVERSE_LOOK_S = 8.0    # a reversal must keep clear of on-schedule peers' next seconds
 STALE_CAP_S = 3.0       # route-time drift assumed at most for a silent off-plan peer
@@ -638,6 +639,25 @@ class Policy:
         self._blocked[key] = out
         return out
 
+    def _ahead_worst(self, t, tau, rate, near):
+        """Smallest distance over the next AHEAD_S steps if I keep `rate` and the peers keep their
+        announced state (one step is not enough warning for a head-on meeting heard late)."""
+        worst = math.inf
+        on_plan = rate == 1.0 and abs(tau - t) <= ON_PLAN_S
+        for aid, _ in near:
+            clock, st = self.peers[aid][0], self.peer_state.get(aid)
+            peer_on = st is None or self._peer_on_plan(aid, t)
+            if peer_on and on_plan:
+                continue                   # the validated plan covers it
+            for k in range(2, 2 + AHEAD_S):
+                mine = _polyline(self.clock, tau + rate * k, tau + rate * k)
+                pt = t + k if peer_on else st[0] + st[1] * (t + k - st[2])
+                theirs = _polyline(clock, pt, pt)
+                if mine is None or theirs is None:
+                    break
+                worst = min(worst, _d(mine[0], theirs[0]))
+        return worst
+
     def _step_worst(self, t, tau, rate, near, nominal=False):
         """Smallest distance between my move at `rate` this step and the peers' reachable positions."""
         mine = _polyline(self.clock, min(tau, tau + rate), max(tau, tau + rate))
@@ -720,7 +740,11 @@ class Policy:
         worst = {r: self._step_worst(t, tau, r, near) for r in cand}
         safe = [r for r in options if worst[r] >= need]
         if safe:
-            return safe
+            if AHEAD_S <= 0:
+                return safe
+            ahead = {r: self._ahead_worst(t, tau, r, near) for r in safe}
+            ok = [r for r in safe if ahead[r] >= need]
+            return ok or sorted(safe, key=lambda r: -ahead[r])
         safe = [r for r in cand if worst[r] >= need]
         if safe:
             return safe[:1]
