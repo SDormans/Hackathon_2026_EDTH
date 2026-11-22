@@ -114,7 +114,8 @@ def run_planner(command, scenario, plan_path, log_path, timeout, env):
                 note=note, returncode=returncode)
 
 
-DIAGNOSTIC_KEYS = ('passes', 'candidate_checks', 'rejections', 'unserved', 'unserved_points', 'contacts')
+DIAGNOSTIC_KEYS = ('passes', 'candidate_checks', 'rejections', 'unserved', 'unserved_points', 'fragility',
+                   'contacts')
 
 
 def read_diagnostics(log_path):
@@ -228,7 +229,12 @@ def summarize(rows):
     unserved_points = dict(sorted(unserved_points.items(), key=lambda kv: -kv[1]))
     baseline = sum(r['baseline_score'] for r in eligible)
     score = sum(r['search_score'] for r in eligible)
+    fragility = [r['diagnostics']['fragility'] for r in eligible
+                 if isinstance(r.get('diagnostics', {}).get('fragility'), dict)]
     return dict(cases=len(rows), compared=len(eligible), contact_summary=contact_summary(rows), baseline_score=baseline,
+                fragility=dict(cases=len(fragility), tight=sum(f['tight'] for f in fragility),
+                               near_pairs=sum(f['near_pairs'] for f in fragility),
+                               score=sum(f['score'] for f in fragility)),
                 search_score=score, improvement=score-baseline,
                 improvement_pct=percent(score-baseline, baseline),
                 wins=sum(r['improvement'] > 1e-7 for r in eligible),

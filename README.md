@@ -525,6 +525,12 @@ Leaderboard setting (1000 m, 200 B/s), greedy plans, 40 unseen scenarios (L1–L
 
 About 9 messages per aircraft per minute and under 0.2 ms per call. The remaining failures are all separation (R8) between aircraft that leave the plan close together, mostly on L4.
 
+### Plan fragility vs link-loss retention
+
+`search_planner.plan_fragility(plan, scenario)` scores a plan as tight couplings + near pairs − (capped mean gap / 120 s). Tight couplings are engage waypoints with confirm slack under 10 s. Near pairs are aircraft pairs closer than `d_sep_m` + 20 m. The gap is the confirm→strike gap. `fragility_parts` returns the components. The planner's diagnostics and the benchmark summary log both (about 20–40 ms on an L4 plan).
+
+`analysis/fragility_correlation.py` scored 127 archive plans on 10 tuning cases with `policy.py`. Within a scenario, fragility does not predict retention: rho −0.01 at 1000x200, −0.05 at 500x100 and 250x50, every CI spanning 0. Near pairs even correlate the wrong way (+0.17). Details are in `history/2026-11-22-fragility-correlation.md`. The link-loss-aware tie-breaker was therefore not built. The official link-loss score uses the organisers' reference plans anyway.
+
 ### Link-loss knowledge store
 
 `analysis/linkloss_knowledge.py` records what every drone knew, second by second, and where each fact came from (`self`, `plan`, `sensed`, `heard` with the sender, `inferred`), plus believed versus real peer positions whenever two drones are within 200 m, event learning time against the time it was needed, and a timeline around each separation failure. The recorder never changes a run (tested).

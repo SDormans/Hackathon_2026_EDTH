@@ -16,7 +16,8 @@ from fleetkit import baseline
 from fleetkit.baseline import (_Planner, _effector_route, _scout_route, EFFECTOR_LAYERS,
                                SCOUT_LAYERS, SPEED_FACTOR)
 from fleetkit.energy import best_range_speed, route_energy_wh
-from fleetkit.geometry import EPS, dist3, hdist, segment_enters_cylinder
+from fleetkit.geometry import (EPS, close_intervals, dist3, hdist, overlapping_pieces,
+                               segment_enters_cylinder)
 from fleetkit.model import EFFECTOR, HOSTILE, SCOUT, UNKNOWN, parse_plan
 from fleetkit.scorer import evaluate
 from fleetkit import validator as rules
@@ -1026,6 +1027,70 @@ def route_key(route):
     """Hashable identity of a waypoint list; routes are never edited after construction."""
     return tuple((w["t"], w["x"], w["y"], w["z"], w.get("dwell_s", 0.0), w.get("action"),
                   w.get("target")) for w in route)
+
+
+FRAGILITY_TIGHT_S = 10.0      # engage with less confirm slack than this is a tight coupling
+FRAGILITY_SEP_MARGIN_M = 20.0  # pairs closer than d_sep_m + this are near pairs
+FRAGILITY_GAP_CAP_S = 120.0    # confirm->strike gaps are capped here in the score
+
+
+def fragility_parts(plan, scenario):
+    """Link-loss fragility of a plan: what a delay or a lost message is most likely to break.
+
+    tight: engage waypoints whose confirm slack (engage t - completed observation end -
+    confirm_margin_s, earliest observation) is below FRAGILITY_TIGHT_S;
+    near_pairs: aircraft pairs ever closer than d_sep_m + FRAGILITY_SEP_MARGIN_M (effectors
+    striking the same contact are exempt); mean_gap_s: mean engage t - observation end.
+    """
+    routes, _ = parse_plan(plan)
+    routes = routes or {}
+    aircraft, contacts, r = scenario.aircraft_by_id(), scenario.contact_by_id(), scenario.rules
+    obs_end = {}
+    for aid, route in routes.items():
+        if aircraft.get(aid) is None or aircraft[aid].type != SCOUT:
+            continue
+        for wp in route.waypoints:
+            c = contacts.get(wp.target)
+            if wp.action == "observe" and c is not None and rules.valid_observation(wp, c, scenario):
+                end = wp.t + wp.dwell_s
+                obs_end[c.id] = min(end, obs_end.get(c.id, math.inf))
+    gaps = []
+    for aid, route in routes.items():
+        for wp in route.waypoints:
+            if wp.action == "engage" and wp.target in obs_end:
+                gaps.append(wp.t - obs_end[wp.target])
+    tight = sum(g - r.confirm_margin_s < FRAGILITY_TIGHT_S for g in gaps)
+    near_m = r.d_sep_m + FRAGILITY_SEP_MARGIN_M
+    items = []
+    for aid in sorted(routes):
+        ac = aircraft.get(aid)
+        item = rules.separation_item(aid, routes[aid], ac) if ac is not None else None
+        if item is None:
+            continue
+        pts = [p for piece in item[1] for p in (piece[2], piece[3])]
+        box = (min(p[0] for p in pts), max(p[0] for p in pts), min(p[1] for p in pts),
+               max(p[1] for p in pts), min(p[2] for p in pts), max(p[2] for p in pts))
+        items.append((item, box))
+    near = 0
+    for i, (a, ba) in enumerate(items):
+        for b, bb in items[i + 1:]:
+            if min(a[3], b[3]) <= max(a[2], b[2]) or (a[4] is not None and a[4] == b[4]):
+                continue
+            if (ba[0] - near_m > bb[1] or bb[0] - near_m > ba[1] or ba[2] - near_m > bb[3]
+                    or bb[2] - near_m > ba[3] or ba[4] - near_m > bb[5] or bb[4] - near_m > ba[5]):
+                continue
+            if any(close_intervals(pa, pb, lo, hi, near_m) is not None
+                   for pa, pb, lo, hi in overlapping_pieces(a[1], b[1])):
+                near += 1
+    return {"tight": tight, "near_pairs": near, "engages": len(gaps),
+            "mean_gap_s": sum(gaps) / len(gaps) if gaps else None}
+
+
+def plan_fragility(plan, scenario):
+    """Lower is sturdier: tight couplings + near pairs - capped mean confirm->strike gap share."""
+    f = fragility_parts(plan, scenario)
+    gap = min(f["mean_gap_s"], FRAGILITY_GAP_CAP_S) / FRAGILITY_GAP_CAP_S if f["engages"] else 1.0
+    return f["tight"] + f["near_pairs"] - gap
 
 
 class IncrementalValidator:
@@ -2514,6 +2579,10 @@ class Search:
                 "unserved": dict(sorted(summary.items(), key=lambda kv: -points[kv[0]])),
                 "unserved_points": dict(sorted(points.items(), key=lambda kv: -kv[1]))}
 
+    def fragility(self, state):
+        plan = state.plan(self.sc.seed)
+        return {**fragility_parts(plan, self.sc), "score": plan_fragility(plan, self.sc)}
+
     def report(self, verified):
         diagnostics = self.diagnostics(verified[0][1].served if verified else [])
         return {"seed": self.sc.seed, "elapsed_s": time.monotonic()-self.start,
@@ -2531,6 +2600,7 @@ class Search:
                 "unserved": diagnostics["unserved"],
                 "unserved_points": diagnostics["unserved_points"],
                 "contacts": diagnostics["contacts"],
+                "fragility": self.fragility(verified[0][0]) if verified else None,
                 "solutions": [{"rank": i, "node": state.node_id, "score": result.score,
                                "served": result.served} for i, (state, result) in enumerate(verified, 1)],
                 "nodes": self.trace}
