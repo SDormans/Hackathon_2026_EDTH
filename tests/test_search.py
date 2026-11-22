@@ -684,6 +684,22 @@ class ScoutRankTests(unittest.TestCase):
         self.assertEqual(ranked[0], 'scout0')
 
 
+class SeparationBufferTests(unittest.TestCase):
+    def test_buffered_search_keeps_wider_pair_separation_and_is_officially_valid(self):
+        sc = Scenario.from_dict(generate('L2', 1))
+        with self.assertRaises(ValueError):
+            Search(sc, seconds=1.0, sep_buffer=-1.0)
+        search = Search(sc, seconds=3.0, sep_buffer=15.0)
+        self.assertEqual(search.checker.sep_rules.d_sep_m, sc.rules.d_sep_m + 15.0)
+        self.assertEqual(search.checker.sc.rules.d_sep_m, sc.rules.d_sep_m)
+        best = search.run()[0][0]
+        plan = best.plan(sc.seed)
+        self.assertTrue(evaluate(sc, plan).valid)
+        # every pair keeps the buffered separation, checked by the official rule
+        wide = replace(sc, rules=replace(sc.rules, d_sep_m=sc.rules.d_sep_m + 15.0))
+        self.assertNotIn("R8", {v.rule for v in evaluate(wide, plan).violations})
+
+
 class CacheTests(unittest.TestCase):
     def test_memoised_validation_matches_fresh_validation(self):
         sc = Scenario.from_dict(generate('L3', 2))

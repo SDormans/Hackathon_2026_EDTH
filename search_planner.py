@@ -996,8 +996,10 @@ class IncrementalValidator:
     R8 checks every pair containing a changed route. Unchanged pairs were already
     validated in the parent. Scoring uses the same energy and observation helpers.
     """
-    def __init__(self, scenario, stop):
+    def __init__(self, scenario, stop, sep_buffer=0.0):
         self.sc = scenario
+        # R8 pair checks use d_sep_m + sep_buffer so flown trajectories keep margin after a cut.
+        self.sep_rules = replace(scenario.rules, d_sep_m=scenario.rules.d_sep_m + sep_buffer)
         self.aircraft = scenario.aircraft_by_id()
         self.contacts = scenario.contact_by_id()
         self.stop = stop
@@ -1092,7 +1094,7 @@ class IncrementalValidator:
         do not overlap, or their bounding boxes are at least d_sep apart on one axis."""
         if min(a[3], b[3]) - max(a[2], b[2]) <= 1e-12:
             return True
-        d = self.sc.rules.d_sep_m
+        d = self.sep_rules.d_sep_m
         p, q = a[5], b[5]
         return (p[0] - q[1] >= d or q[0] - p[1] >= d or p[2] - q[3] >= d or q[2] - p[3] >= d
                 or p[4] - q[5] >= d or q[4] - p[5] >= d)
@@ -1106,7 +1108,7 @@ class IncrementalValidator:
         if a[1] is None or b[1] is None or self.apart(a[1], b[1]):
             violation = None
         else:
-            violation = rules.separation_violation(self.sc.rules, self.contacts, a[1][:5], b[1][:5])
+            violation = rules.separation_violation(self.sep_rules, self.contacts, a[1][:5], b[1][:5])
         if len(self._pairs) > 2000000:
             self._pairs.clear()
         self._pairs[key] = violation
@@ -1193,7 +1195,7 @@ class IncrementalValidator:
             self.check_time()
             if a[0] < 0 or b[0] < 0:
                 violation = (None if a[1] is None or b[1] is None else
-                             rules.separation_violation(self.sc.rules, self.contacts,
+                             rules.separation_violation(self.sep_rules, self.contacts,
                                                         a[1][:5], b[1][:5]))
             else:
                 violation = self.pair_violation(a, b)
@@ -1252,13 +1254,15 @@ class WarmPlanner(_Planner):
 class Search:
     def __init__(self, scenario, seconds=45.0, top_n=5, beam_width=6, start=None, lns_share=0.4,
                  interleave=False, adaptive=False, restarts=True, widen=False,
-                 scout_speed="fast", obs_stretch=True):
+                 scout_speed="fast", obs_stretch=True, sep_buffer=0.0):
         if seconds < 0 or not 1 <= top_n <= 100 or not 1 <= beam_width <= 100:
             raise ValueError("seconds must be nonnegative; top_n and beam_width must be 1..100")
         if not 0 <= lns_share <= 1:
             raise ValueError("lns_share must be 0..1")
         if scout_speed not in SCOUT_SPEEDS:
             raise ValueError(f"scout_speed must be one of {SCOUT_SPEEDS}")
+        if sep_buffer < 0:
+            raise ValueError("sep_buffer must be nonnegative")
         # Scout tour settings are module-wide (tour cache and helpers); one Search per run.
         global SCOUT_SPEED_MODE, OBS_STRETCH
         SCOUT_SPEED_MODE, OBS_STRETCH = scout_speed, bool(obs_stretch)
@@ -1272,7 +1276,8 @@ class Search:
         self.top_n, self.width = top_n, beam_width
         # The beam ends early so the final share of the budget repairs its best plan.
         self.beam_stop = self.stop - lns_share * max(0.0, self.stop - self.start)
-        self.checker = IncrementalValidator(scenario, self.stop)
+        self.sep_buffer = float(sep_buffer)
+        self.checker = IncrementalValidator(scenario, self.stop, self.sep_buffer)
         self.aircraft = scenario.aircraft_by_id()
         self.contacts = scenario.contact_by_id()
         self.lns = {"iterations": 0, "accepted": 0, "improvements": 0, "gain": 0.0,
@@ -2261,7 +2266,7 @@ class Search:
                 "candidate_check_seconds": self.checker.seconds,
                 "rejections": self.checker.rejections,
                 "beam_width": self.width, "requested_top_n": self.top_n,
-                "scouting": {"scout_speed": self.scout_speed, "obs_stretch": self.obs_stretch},
+                "scouting": {"scout_speed": self.scout_speed, "obs_stretch": self.obs_stretch}, "sep_buffer_m": self.sep_buffer,
                 "lns": {**self.lns, "variant": {"interleave": self.interleave,
                                                 "adaptive": self.adaptive,
                                                 "restarts": self.restarts},
