@@ -203,7 +203,7 @@ def write_variant(name, spec, event_seeds, cases, cells, score, frontier, per_ca
     rows = []
     if path.exists():
         with open(path, newline="") as fh:
-            rows = [r for r in csv.DictReader(fh) if not (r["variant"] == name and r["event_seeds"] == row["event_seeds"])]
+            rows = [r for r in csv.DictReader(fh) if r["variant"] != name]  # <name>.csv holds only the latest run
     rows.append(row)
     with open(path, "w", newline="") as fh:
         w = csv.DictWriter(fh, fieldnames=list(row))
