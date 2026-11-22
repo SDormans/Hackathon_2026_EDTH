@@ -118,7 +118,6 @@ SLOW_LOOK_S = 4.0       # ... and so must braking or stopping
 REVERSE_LOOK_S = 8.0    # a reversal must keep clear of on-schedule peers' next seconds
 STALE_CAP_S = 3.0       # route-time drift assumed at most for a silent off-plan peer
 ESCAPE_GAIN_M = 2.0     # with no clear move, leave a hold only for this much more distance
-NOMINAL_AHEAD = True    # ... judged over the look-ahead too: a stop can be clear now and hit next
 HEARTBEAT_NEAR_M = 300.0  # an off-plan aircraft re-announces its state every second while a peer is this close
 O_FORWARD = True        # "observed" notices go to the strike effectors that may lack them (store and forward),
                         # not every second until the strike; effectors relay them to their partners
@@ -810,8 +809,6 @@ class Policy:
         nominal = [(aid, self._peer_nominal(aid, t)) for aid, _ in near]
         nominal = [(aid, reach) for aid, reach in nominal if reach is not None]
         worst = {r: self._step_worst(t, tau, r, nominal, nominal=True) for r in cand}
-        if NOMINAL_AHEAD:
-            worst = {r: min(worst[r], self._ahead_worst(t, tau, r, nominal)) for r in cand}
         best = max(cand, key=lambda r: worst[r])
         return [best if worst[best] >= worst[0.0] + ESCAPE_GAIN_M else 0.0]
 

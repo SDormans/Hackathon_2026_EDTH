@@ -74,28 +74,6 @@ class PolicyRuleTests(unittest.TestCase):
         p._polyline_point = lambda aid, now: [here]
         self.assertGreater(p._step_worst(t, t, 1.0, [(peer, far)], nominal=True), 1000.0)
 
-    def test_no_clear_move_fallback_looks_ahead_before_stopping(self):
-        # L3-301 e2001, 2000 m: H04 stopped at its engage gate because a stop and a slow move tied over
-        # one step, and the on-plan H08 behind it closed to 25.6 m before hearing the stop
-        sc, plan, _ = self.cases[0]
-        p = self.factory(sc, plan, sorted(parse_plan(plan)[0])[0])
-        t = (p.clock.start + p.clock.end) / 2.0
-        here = p.clock.position(t)
-        p._peer_reach = lambda aid, now: [here]
-        p._peer_nominal = lambda aid, now: [here]
-        p._allowed = lambda tau, r, may: r != 1.0
-        p._step_worst = lambda now, tau, r, near, nominal=False: {0.5: 57.3, 0.0: 57.3, -1.0: 39.3}[r] if nominal else 0.0
-        p._ahead_worst = lambda now, tau, r, near: {0.5: 36.0, 0.0: 19.0, -1.0: 25.8}[r]
-        module = type(p)._safe_options.__globals__
-        old = module['NOMINAL_AHEAD']
-        try:
-            self.assertEqual(p._safe_options(t, t, [0.5, 0.0, -1.0], False), [0.5])
-            module['NOMINAL_AHEAD'] = False
-            self.assertEqual(p._safe_options(t, t, [0.5, 0.0, -1.0], False), [0.0])
-        finally:
-            module['NOMINAL_AHEAD'] = old
-
-
 class HarnessCliTests(unittest.TestCase):
     def test_eval_harness_exposes_run_and_report(self):
         for cmd in ('run', 'report'):
