@@ -24,6 +24,9 @@ Coordination, using what every drone knows of its peers (plan + announced states
   no longer slow down just short of a plan that had 12 s between observation and strike.
 - GROUP_SYNC: a confirmed effector holds short while its strike partners' predicted
   engagements are further behind it than the plan's own spread (or sync window - 6 s).
+- BOXED_NOMINAL: when no rate keeps the separation margin against every move a right-of-way peer
+  may make, the rate with the most room against announced states is taken (worst case breaks ties),
+  instead of the best worst case, which is often a near tie that points into the peer's actual path.
 - SCOUT_WAIT: an unconfirmed effector waits for a scout it knows is late (from the scout's
   announced state) for as long as the contact's window allows, instead of a fixed 15 s.
 
@@ -89,6 +92,8 @@ SCOUT_WAIT = True       # an unconfirmed effector waits for a late scout while i
 SCOUT_WAIT_PAD_S = 5.0
 EXACT_OBS_END = True    # a scout reports its observation end from its route clock, not the step it noticed it
 CONFIRM_SLACK_S = 0.1
+BOXED_NOMINAL = True    # when no rate keeps the margin against every move a peer may make, pick the one
+                        # with the most room against the peers' announced states (worst case breaks ties)
 
 # ---------------------------------------------------------------------- compact wire format
 ALPHABET = "".join(chr(c) for c in range(32, 127) if chr(c) not in '"\\')
@@ -362,7 +367,7 @@ class Policy:
             return None            # engaged, landed or still on the ground
         return clock.position(tau)
 
-    def _room(self, t, tau, rate):
+    def _room(self, t, tau, rate, nominal=False):
         """Smallest predicted distance to any peer over the look-ahead for a constant rate."""
         here = self.clock.position(tau)
         near = []
@@ -386,9 +391,9 @@ class Policy:
             for aid in near:
                 # An off-plan peer with a lower id has the right of way: it may move any way.
                 known = aid in self.peer_state
-                rates = (None, -1.0, 0.0, 1.0) if (known and aid < self.id) else (None,)
+                rates = (None, -1.0, 0.0, 1.0) if (known and aid < self.id and not nominal) else (None,)
                 # An announced state may be a step or so stale (a lost or late message).
-                shifts = (-SLACK_S, 0.0, SLACK_S) if known else (0.0,)
+                shifts = (-SLACK_S, 0.0, SLACK_S) if known and not nominal else (0.0,)
                 for ro, sh in ((ro, sh) for ro in rates for sh in shifts):
                     p = self._peer_pos(aid, t + dt + sh, ro)
                     if p is None:
@@ -502,6 +507,10 @@ class Policy:
                 break
             if room > best_room:
                 choice, best_room = r, room
+        else:
+            if BOXED_NOMINAL:
+                choice = max(options, key=lambda r: (min(self._room(t, tau, r, nominal=True), self.sep),
+                                                     self._room(t, tau, r)))
         self.rate = choice
         action = ({"kind": "continue"} if choice == 1.0 else {"kind": "hold"} if choice == 0.0
                   else {"kind": "return"} if choice == -1.0 else {"kind": "speed", "scale": choice})
